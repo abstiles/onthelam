@@ -6,6 +6,7 @@ operations on the given argument.
 
 import ast
 from collections import namedtuple
+from dataclasses import dataclass, field
 
 OP_MAP = {
     "+": ast.Add(),
@@ -54,7 +55,41 @@ OP_PRECEDENCE = {
 }
 
 
-LambdaBody = namedtuple('LambdaBody', ['tree', 'code_str'])
+LambdaBody = namedtuple("LambdaBody", ["tree", "code_str"])
+
+
+@dataclass(frozen=True)
+class ClosureChain:
+    """Maintains a chain of references to objects closed over in the lambda"""
+
+    values: list
+    previous: "ClosureChain" = None
+    size: int = field(init=False)
+
+    def __post_init__(self):
+        object.__setattr__(
+            self,
+            "size",
+            len(self.values) + (len(self.previous) if self.previous else 0),
+        )
+
+    def __iter__(self):
+        if self.previous:
+            yield from self.previous
+        yield from self.values
+
+    def __len__(self):
+        return self.size
+
+    def chain(self, next_values):
+        """Add another chunk of values to the end of the chain"""
+        return ClosureChain(next_values, self)
+
+    @classmethod
+    def new(cls):
+        """Create a new empty chain"""
+        return cls([])
+
 
 class LambdaBuilder:
     """Assembles the lambda by recording operations performed on it"""
@@ -62,22 +97,13 @@ class LambdaBuilder:
     def __init__(
         self,
         body=None,
-        parent=None,
-        closed_values=None,
-        closed_count=0,
+        closure=ClosureChain.new(),
         precedence=100,
     ):
         if not body:
-            body = LambdaBody(
-                ast.Name(id="_", ctx=ast.Load()),
-                code_str="_"
-            )
+            body = LambdaBody(ast.Name(id="_", ctx=ast.Load()), code_str="_")
         self.__body = body
-        self.__parent = parent
-        if not closed_values:
-            closed_values = []
-        self.__closure = closed_values
-        self.__closure_size = len(closed_values) + closed_count
+        self.__closure = closure
         self.__precedence = precedence
 
     def __repr__(self):
@@ -97,15 +123,13 @@ class LambdaBuilder:
                     op=OP_MAP[op],
                     right=ast.Subscript(
                         value=ast.Name(id="closure", ctx=ast.Load()),
-                        slice=ast.Constant(value=self.__closure_size),
+                        slice=ast.Constant(value=len(self.__closure)),
                         ctx=ast.Load(),
                     ),
                 ),
                 code_str=(f"{body_str} {op} {repr(other)}"),
             ),
-            parent=self,
-            closed_values=[other],
-            closed_count=self.__closure_size,
+            closure=self.__closure.chain([other]),
             precedence=OP_PRECEDENCE[op],
         )
         return new
@@ -122,7 +146,7 @@ class LambdaBuilder:
                 ast.BinOp(
                     left=ast.Subscript(
                         value=ast.Name(id="closure", ctx=ast.Load()),
-                        slice=ast.Constant(value=self.__closure_size),
+                        slice=ast.Constant(value=len(self.__closure)),
                         ctx=ast.Load(),
                     ),
                     op=OP_MAP[op],
@@ -130,9 +154,7 @@ class LambdaBuilder:
                 ),
                 code_str=(f"{repr(other)} {op} {body_str}"),
             ),
-            parent=self,
-            closed_values=[other],
-            closed_count=self.__closure_size,
+            closure=self.__closure.chain([other]),
             precedence=OP_PRECEDENCE[op],
         )
         return new
@@ -199,24 +221,10 @@ class LambdaBuilder:
         code = compile(
             ast.fix_missing_locations(ast_object), "<LambdaBuilder>", mode="eval"
         )
-        closure = list(self.__assemble_closure())
-        if len(closure) != self.__closure_size:
-            raise RuntimeError(
-                f"Lambda closure corrupt. Expected size {self.__closure_size}"
-                f" but found {len(closure)} stored values.",
-                closure,
-            )
+        closure = list(self.__closure)
         # Evaluating the AST we generate is key to the functioning of this
         # object, so we ignore the eval warning here.
         return eval(code, {"closure": closure})  # pylint: disable=eval-used
-
-    def __assemble_closure(self):
-        if self.__parent is not None:
-            # Disable protected access because parent is an instance of this
-            # class.
-            # pylint: disable=protected-access
-            yield from self.__parent.__assemble_closure()
-        yield from self.__closure
 
 
 _ = LambdaBuilder()

@@ -40,12 +40,6 @@ def test_basic_ops(expr, body_str, arg, result):
     assert fn(arg) == result
 
 
-def test_corrupt_closure():
-    fn = LambdaBuilder(closed_count=1)
-    with pytest.raises(RuntimeError):
-        fn(5)
-
-
 def test_add_multiple():
     fn = _ + ", hello" + " world"
     assert repr(fn) == "_ -> _ + ', hello' + ' world'"
