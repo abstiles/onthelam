@@ -1,4 +1,11 @@
+"""
+The onthelam module provides a special object `_` which records operations
+performed on it, returning an object that, when called, replays those
+operations on the given argument.
+"""
+
 import ast
+from collections import namedtuple
 
 OP_MAP = {
     "+": ast.Add(),
@@ -47,23 +54,25 @@ OP_PRECEDENCE = {
 }
 
 
+LambdaBody = namedtuple('LambdaBody', ['tree', 'code_str'])
+
 class LambdaBuilder:
+    """Assembles the lambda by recording operations performed on it"""
+
     def __init__(
         self,
         body=None,
-        body_str=None,
         parent=None,
         closed_values=None,
         closed_count=0,
         precedence=100,
     ):
         if not body:
-            body = ast.Name(id="_", ctx=ast.Load())
-            body_str = "_"
+            body = LambdaBody(
+                ast.Name(id="_", ctx=ast.Load()),
+                code_str="_"
+            )
         self.__body = body
-        if not body_str:
-            raise ValueError("body_str must be present if body is provided")
-        self.__body_str = body_str
         self.__parent = parent
         if not closed_values:
             closed_values = []
@@ -72,26 +81,28 @@ class LambdaBuilder:
         self.__precedence = precedence
 
     def __repr__(self):
-        return "_ -> " + self.__body_str
+        return "_ -> " + self.__body.code_str
 
     def __op(self, op, other):
         body_str = (
-            f"({self.__body_str})"
+            f"({self.__body.code_str})"
             if self.__precedence < OP_PRECEDENCE[op]
-            else self.__body_str
+            else self.__body.code_str
         )
 
         new = LambdaBuilder(
-            ast.BinOp(
-                left=self.__body,
-                op=OP_MAP[op],
-                right=ast.Subscript(
-                    value=ast.Name(id="closure", ctx=ast.Load()),
-                    slice=ast.Constant(value=self.__closure_size),
-                    ctx=ast.Load(),
+            LambdaBody(
+                ast.BinOp(
+                    left=self.__body.tree,
+                    op=OP_MAP[op],
+                    right=ast.Subscript(
+                        value=ast.Name(id="closure", ctx=ast.Load()),
+                        slice=ast.Constant(value=self.__closure_size),
+                        ctx=ast.Load(),
+                    ),
                 ),
+                code_str=(f"{body_str} {op} {repr(other)}"),
             ),
-            body_str=(f"{body_str} {op} {repr(other)}"),
             parent=self,
             closed_values=[other],
             closed_count=self.__closure_size,
@@ -101,22 +112,24 @@ class LambdaBuilder:
 
     def __rop(self, op, other):
         body_str = (
-            f"({self.__body_str})"
+            f"({self.__body.code_str})"
             if self.__precedence <= OP_PRECEDENCE[op]
-            else self.__body_str
+            else self.__body.code_str
         )
 
         new = LambdaBuilder(
-            ast.BinOp(
-                left=ast.Subscript(
-                    value=ast.Name(id="closure", ctx=ast.Load()),
-                    slice=ast.Constant(value=self.__closure_size),
-                    ctx=ast.Load(),
+            LambdaBody(
+                ast.BinOp(
+                    left=ast.Subscript(
+                        value=ast.Name(id="closure", ctx=ast.Load()),
+                        slice=ast.Constant(value=self.__closure_size),
+                        ctx=ast.Load(),
+                    ),
+                    op=OP_MAP[op],
+                    right=self.__body.tree,
                 ),
-                op=OP_MAP[op],
-                right=self.__body,
+                code_str=(f"{repr(other)} {op} {body_str}"),
             ),
-            body_str=(f"{repr(other)} {op} {body_str}"),
             parent=self,
             closed_values=[other],
             closed_count=self.__closure_size,
@@ -167,8 +180,8 @@ class LambdaBuilder:
         return self.__rop("@", other)
 
     def __call__(self, arg):
-        fn = self.__compile()
-        return fn(arg)
+        func = self.__compile()
+        return func(arg)
 
     def __compile(self):
         ast_object = ast.Expression(
@@ -180,27 +193,30 @@ class LambdaBuilder:
                     kw_defaults=[],
                     defaults=[],
                 ),
-                body=self.__body,
+                body=self.__body.tree,
             )
         )
         code = compile(
             ast.fix_missing_locations(ast_object), "<LambdaBuilder>", mode="eval"
         )
-        return eval(code, {"closure": self.__assemble_closure()})
-
-    def __assemble_closure(self):
-        node = self
-        closure = node.__closure
-        while node.__parent:
-            node = node.__parent
-            closure[:0] = node.__closure
+        closure = list(self.__assemble_closure())
         if len(closure) != self.__closure_size:
             raise RuntimeError(
                 f"Lambda closure corrupt. Expected size {self.__closure_size}"
                 f" but found {len(closure)} stored values.",
                 closure,
             )
-        return closure
+        # Evaluating the AST we generate is key to the functioning of this
+        # object, so we ignore the eval warning here.
+        return eval(code, {"closure": closure})  # pylint: disable=eval-used
+
+    def __assemble_closure(self):
+        if self.__parent is not None:
+            # Disable protected access because parent is an instance of this
+            # class.
+            # pylint: disable=protected-access
+            yield from self.__parent.__assemble_closure()
+        yield from self.__closure
 
 
 _ = LambdaBuilder()

@@ -40,11 +40,6 @@ def test_basic_ops(expr, body_str, arg, result):
     assert fn(arg) == result
 
 
-def test_missing_body_str():
-    with pytest.raises(ValueError):
-        fn = LambdaBuilder(body=ast.parse("_", mode="eval"))
-
-
 def test_corrupt_closure():
     fn = LambdaBuilder(closed_count=1)
     with pytest.raises(RuntimeError):
