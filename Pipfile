@@ -1,0 +1,16 @@
+[[source]]
+url = "https://pypi.org/simple"
+verify_ssl = true
+name = "pypi"
+
+[packages]
+
+[dev-packages]
+pylint = "*"
+pytest = "*"
+mypy = "*"
+pytest-cov = "*"
+on-the-lam = {editable = true, path = "."}
+
+[requires]
+python_version = "3.9"
