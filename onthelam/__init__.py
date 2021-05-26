@@ -7,6 +7,7 @@ operations on the given argument.
 import ast
 from collections import namedtuple
 from dataclasses import dataclass, field
+from typing import cast, Any, Callable, Iterator, NamedTuple, Optional
 
 OP_MAP = {
     "+": ast.Add(),
@@ -55,38 +56,42 @@ OP_PRECEDENCE = {
 }
 
 
-LambdaBody = namedtuple("LambdaBody", ["tree", "code_str"])
+class LambdaBody(NamedTuple):
+    """The AST for a lambda and its string representation"""
+
+    tree: ast.AST
+    code_str: str
 
 
 @dataclass(frozen=True)
 class ClosureChain:
     """Maintains a chain of references to objects closed over in the lambda"""
 
-    values: list
-    previous: "ClosureChain" = None
+    values: list[Any]
+    previous: Optional["ClosureChain"] = None
     size: int = field(init=False)
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         object.__setattr__(
             self,
             "size",
             len(self.values) + (len(self.previous) if self.previous else 0),
         )
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[Any]:
         if self.previous:
             yield from self.previous
         yield from self.values
 
-    def __len__(self):
+    def __len__(self) -> int:
         return self.size
 
-    def chain(self, next_values):
+    def chain(self, next_values: list[Any]) -> "ClosureChain":
         """Add another chunk of values to the end of the chain"""
         return ClosureChain(next_values, self)
 
     @classmethod
-    def new(cls):
+    def new(cls) -> "ClosureChain":
         """Create a new empty chain"""
         return cls([])
 
@@ -96,9 +101,9 @@ class LambdaBuilder:
 
     def __init__(
         self,
-        body=None,
-        closure=ClosureChain.new(),
-        precedence=100,
+        body: Optional[LambdaBody] = None,
+        closure: ClosureChain = ClosureChain.new(),
+        precedence: int = 100,
     ):
         if not body:
             body = LambdaBody(ast.Name(id="_", ctx=ast.Load()), code_str="_")
@@ -106,10 +111,10 @@ class LambdaBuilder:
         self.__closure = closure
         self.__precedence = precedence
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "_ -> " + self.__body.code_str
 
-    def __op(self, op, other):
+    def __op(self, op: str, other: Any) -> "LambdaBuilder":
         body_str = (
             f"({self.__body.code_str})"
             if self.__precedence < OP_PRECEDENCE[op]
@@ -134,7 +139,7 @@ class LambdaBuilder:
         )
         return new
 
-    def __rop(self, op, other):
+    def __rop(self, op: str, other: Any) -> "LambdaBuilder":
         body_str = (
             f"({self.__body.code_str})"
             if self.__precedence <= OP_PRECEDENCE[op]
@@ -159,53 +164,53 @@ class LambdaBuilder:
         )
         return new
 
-    def __add__(self, other):
+    def __add__(self, other: Any) -> "LambdaBuilder":
         return self.__op("+", other)
 
-    def __radd__(self, other):
+    def __radd__(self, other: Any) -> "LambdaBuilder":
         return self.__rop("+", other)
 
-    def __sub__(self, other):
+    def __sub__(self, other: Any) -> "LambdaBuilder":
         return self.__op("-", other)
 
-    def __rsub__(self, other):
+    def __rsub__(self, other: Any) -> "LambdaBuilder":
         return self.__rop("-", other)
 
-    def __mul__(self, other):
+    def __mul__(self, other: Any) -> "LambdaBuilder":
         return self.__op("*", other)
 
-    def __rmul__(self, other):
+    def __rmul__(self, other: Any) -> "LambdaBuilder":
         return self.__rop("*", other)
 
-    def __truediv__(self, other):
+    def __truediv__(self, other: Any) -> "LambdaBuilder":
         return self.__op("/", other)
 
-    def __rtruediv__(self, other):
+    def __rtruediv__(self, other: Any) -> "LambdaBuilder":
         return self.__rop("/", other)
 
-    def __floordiv__(self, other):
+    def __floordiv__(self, other: Any) -> "LambdaBuilder":
         return self.__op("//", other)
 
-    def __rfloordiv__(self, other):
+    def __rfloordiv__(self, other: Any) -> "LambdaBuilder":
         return self.__rop("//", other)
 
-    def __mod__(self, other):
+    def __mod__(self, other: Any) -> "LambdaBuilder":
         return self.__op("%", other)
 
-    def __rmod__(self, other):
+    def __rmod__(self, other: Any) -> "LambdaBuilder":
         return self.__rop("%", other)
 
-    def __matmul__(self, other):
+    def __matmul__(self, other: Any) -> "LambdaBuilder":
         return self.__op("@", other)
 
-    def __rmatmul__(self, other):
+    def __rmatmul__(self, other: Any) -> "LambdaBuilder":
         return self.__rop("@", other)
 
-    def __call__(self, arg):
+    def __call__(self, arg: Any) -> Any:
         func = self.__compile()
         return func(arg)
 
-    def __compile(self):
+    def __compile(self) -> Callable[[Any], Any]:
         ast_object = ast.Expression(
             ast.Lambda(
                 args=ast.arguments(
@@ -224,7 +229,11 @@ class LambdaBuilder:
         closure = list(self.__closure)
         # Evaluating the AST we generate is key to the functioning of this
         # object, so we ignore the eval warning here.
-        return eval(code, {"closure": closure})  # pylint: disable=eval-used
+        func = eval(code, {"closure": closure})  # pylint: disable=eval-used
+        # This is guaranteed to be callable because the AST we are compiling
+        # contains a single expression containing a single lambda accepting
+        # one parameter.
+        return cast(Callable[[Any], Any], func)
 
 
 _ = LambdaBuilder()
