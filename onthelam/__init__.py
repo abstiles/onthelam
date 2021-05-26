@@ -3,10 +3,51 @@ import ast
 OP_MAP = {
     '+': ast.Add(),
     '-': ast.Sub(),
+    '*': ast.Mult(),
+    '@': ast.MatMult(),
+    '/': ast.Div(),
+    '//': ast.FloorDiv(),
+    '%': ast.Mod(),
+}
+
+# Referenced from https://docs.python.org/3/reference/expressions.html#operator-precedence
+OP_PRECEDENCE = {
+    'bool': 1,
+    'or': 2,
+    'and': 3,
+    'not': 4,
+    'in': 5,
+    'is': 5,
+    '<': 5,
+    '<=': 5,
+    '==': 5,
+    '!=': 5,
+    '>=': 5,
+    '>': 5,
+    '|': 6,
+    '^': 7,
+    '&': 8,
+    '<<': 9,
+    '>>': 9,
+    '+': 10,
+    '-': 10,
+    '*': 11,
+    '@': 11,
+    '/': 11,
+    '//': 11,
+    '%': 11,
+    '+x': 12,
+    '-x': 12,
+    '~x': 12,
+    '**': 13,
+    'await': 14,
+    '[]': 15,
+    '.': 15,
+    'x()': 15
 }
 
 class LambdaBuilder:
-    def __init__(self, body=None, body_str=None, parent=None, closed_values=None, closed_count=0):
+    def __init__(self, body=None, body_str=None, parent=None, closed_values=None, closed_count=0, precedence=100):
         if not body:
             body = ast.Name(id='_', ctx=ast.Load())
             body_str = '_'
@@ -19,11 +60,14 @@ class LambdaBuilder:
             closed_values = []
         self.__closure = closed_values
         self.__closure_size = len(closed_values) + closed_count
+        self.__precedence = precedence
 
     def __repr__(self):
         return '_ -> ' + self.__body_str
 
     def __op(self, op, other):
+        body_str = f'({self.__body_str})' if self.__precedence < OP_PRECEDENCE[op] else self.__body_str
+
         new = LambdaBuilder(
             ast.BinOp(
                 left=self.__body,
@@ -34,14 +78,17 @@ class LambdaBuilder:
                     ctx=ast.Load()
                 )
             ),
-            body_str=(f'{self.__body_str} {op} {repr(other)}'),
+            body_str=(f'{body_str} {op} {repr(other)}'),
             parent=self,
             closed_values=[other],
-            closed_count=self.__closure_size
+            closed_count=self.__closure_size,
+            precedence=OP_PRECEDENCE[op],
         )
         return new
 
     def __rop(self, op, other):
+        body_str = f'({self.__body_str})' if self.__precedence <= OP_PRECEDENCE[op] else self.__body_str
+
         new = LambdaBuilder(
             ast.BinOp(
                 left=ast.Subscript(
@@ -52,10 +99,11 @@ class LambdaBuilder:
                 op=OP_MAP[op],
                 right=self.__body,
             ),
-            body_str=(f'{repr(other)} {op} {self.__body_str}'),
+            body_str=(f'{repr(other)} {op} {body_str}'),
             parent=self,
             closed_values=[other],
-            closed_count=self.__closure_size
+            closed_count=self.__closure_size,
+            precedence=OP_PRECEDENCE[op],
         )
         return new
 
@@ -70,6 +118,36 @@ class LambdaBuilder:
 
     def __rsub__(self, other):
         return self.__rop('-', other)
+
+    def __mul__(self, other):
+        return self.__op('*', other)
+
+    def __rmul__(self, other):
+        return self.__rop('*', other)
+
+    def __truediv__(self, other):
+        return self.__op('/', other)
+
+    def __rtruediv__(self, other):
+        return self.__rop('/', other)
+
+    def __floordiv__(self, other):
+        return self.__op('//', other)
+
+    def __rfloordiv__(self, other):
+        return self.__rop('//', other)
+
+    def __mod__(self, other):
+        return self.__op('%', other)
+
+    def __rmod__(self, other):
+        return self.__rop('%', other)
+
+    def __matmul__(self, other):
+        return self.__op('@', other)
+
+    def __rmatmul__(self, other):
+        return self.__rop('@', other)
 
     def __call__(self, arg):
         fn = self.__compile()
