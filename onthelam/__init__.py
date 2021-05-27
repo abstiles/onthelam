@@ -5,11 +5,38 @@ operations on the given argument.
 """
 
 import ast
-import operator
 from enum import Enum
 from dataclasses import dataclass, field
 from typing import cast, Any, Callable, Iterator, NamedTuple, Optional, NoReturn
 from types import CodeType
+
+
+def compare(op: ast.operator, left: ast.expr, right: ast.expr) -> ast.Compare:
+    """Generate an ast comparison"""
+    return ast.Compare(left=left, ops=[op], comparators=[right])
+
+
+def bin_op(op: ast.operator, left: ast.expr, right: ast.expr) -> ast.BinOp:
+    """Generate an ast binary operation"""
+    return ast.BinOp(left=left, op=op, right=right)
+
+
+def unary_op(op: ast.operator, operand: ast.expr) -> ast.UnaryOp:
+    """Generate an ast unary operation"""
+    return ast.UnaryOp(op=op, operand=operand)
+
+
+def subscript(value: ast.expr, idx: ast.expr) -> ast.Subscript:
+    """Generate an ast subscript operation"""
+    return ast.Subscript(value=value, slice=idx, ctx=ast.Load())
+
+
+def attribute(value: ast.expr, attr: str) -> ast.Attribute:
+    """Generate an ast attribute get operation"""
+    return ast.Attribute(value=value, attr=attr, ctx=ast.Load())
+
+
+NothingOperator = ast.operator()
 
 
 # Precedence rules referenced from:
@@ -17,45 +44,42 @@ from types import CodeType
 class Operation(Enum):
     """Represent an operation that can occur on an object"""
 
-    # These first few are Compares, not BinaryOps, and require special handling.
-    LT = (5, "{} < {}", operator.lt, ast.Lt())
-    LE = (5, "{} <= {}", operator.le, ast.LtE())
-    EQ = (5, "{} == {}", operator.eq, ast.Eq())
-    NE = (5, "{} != {}", operator.ne, ast.NotEq())
-    GE = (5, "{} >= {}", operator.ge, ast.GtE())
-    GT = (5, "{} > {}", operator.gt, ast.Gt())
-
-    # The BinaryOps
-    OR = (6, "{} | {}", operator.or_, ast.BitOr())
-    XOR = (7, "{} ^ {}", operator.xor, ast.BitXor())
-    AND = (8, "{} & {}", operator.and_, ast.BitAnd())
-    LSHIFT = (9, "{} << {}", operator.lshift, ast.LShift())
-    RSHIFT = (9, "{} >> {}", operator.rshift, ast.RShift())
-    ADD = (10, "{} + {}", operator.add, ast.Add())
-    SUB = (10, "{} - {}", operator.sub, ast.Sub())
-    MUL = (11, "{} * {}", operator.mul, ast.Mult())
-    MATMUL = (11, "{} @ {}", operator.matmul, ast.MatMult())
-    TRUEDIV = (11, "{} / {}", operator.truediv, ast.Div())
-    FLOORDIV = (11, "{} // {}", operator.floordiv, ast.FloorDiv())
-    MOD = (11, "{} % {}", operator.mod, ast.Mod())
+    LT = (5, "{} < {}", compare, ast.Lt())
+    LE = (5, "{} <= {}", compare, ast.LtE())
+    EQ = (5, "{} == {}", compare, ast.Eq())
+    NE = (5, "{} != {}", compare, ast.NotEq())
+    GE = (5, "{} >= {}", compare, ast.GtE())
+    GT = (5, "{} > {}", compare, ast.Gt())
+    OR = (6, "{} | {}", bin_op, ast.BitOr())
+    XOR = (7, "{} ^ {}", bin_op, ast.BitXor())
+    AND = (8, "{} & {}", bin_op, ast.BitAnd())
+    LSHIFT = (9, "{} << {}", bin_op, ast.LShift())
+    RSHIFT = (9, "{} >> {}", bin_op, ast.RShift())
+    ADD = (10, "{} + {}", bin_op, ast.Add())
+    SUB = (10, "{} - {}", bin_op, ast.Sub())
+    MUL = (11, "{} * {}", bin_op, ast.Mult())
+    MATMUL = (11, "{} @ {}", bin_op, ast.MatMult())
+    TRUEDIV = (11, "{} / {}", bin_op, ast.Div())
+    FLOORDIV = (11, "{} // {}", bin_op, ast.FloorDiv())
+    MOD = (11, "{} % {}", bin_op, ast.Mod())
 
     # The following unary operations require special handling
-    NEG = (12, "+{}", operator.neg, ast.USub())
-    POS = (12, "-{}", operator.pos, ast.UAdd())
-    INVERT = (12, "~{}", operator.invert, ast.Invert())
+    NEG = (12, "+{}", unary_op, ast.USub())
+    POS = (12, "-{}", unary_op, ast.UAdd())
+    INVERT = (12, "~{}", unary_op, ast.Invert())
 
     # Another BinaryOp
-    POW = (13, "{} ** {}", operator.pow, ast.Pow())
+    POW = (13, "{} ** {}", bin_op, ast.Pow())
 
     # The folowing are not considered BinaryOps and require special handling.
-    GETITEM = (15, "{}[{}]", operator.getitem, ast.Subscript())
-    GETATTR = (15, "{}.{}", getattr, ast.Attribute())
+    GETITEM = (15, "{}[{}]", subscript, NothingOperator)
+    GETATTR = (15, "{}.{}", subscript, NothingOperator)
 
     def __init__(
         self,
         precedence: int,
         format_str: str,
-        operation: Callable[..., Any],
+        operation: Callable[..., ast.expr],
         ast_op: ast.operator,
     ):
         self.precedence = precedence
@@ -154,78 +178,34 @@ class LambdaBuilder:
     def __repr__(self) -> str:
         return f"{self.__name} -> {self.__body}"
 
-    def __op(self, op: Operation, other: Any) -> "LambdaBuilder":
-        body_str = (
-            f"({self.__body})"
-            if self.__precedence < op.precedence
-            else str(self.__body)
+    def __op(
+        self, op: Operation, other: Any, from_right: bool = False
+    ) -> "LambdaBuilder":
+        do_paren = self.__precedence < op.precedence or (
+            from_right and self.__precedence == op.precedence
         )
+        body_str = f"({self.__body})" if do_paren else str(self.__body)
 
-        right = ast.Subscript(
+        other_ast = ast.Subscript(
             value=ast.Name(id="closure", ctx=ast.Load()),
             slice=ast.Constant(value=len(self.__closure)),
             ctx=ast.Load(),
         )
 
-        new = LambdaBuilder(
-            self.__name,
-            LambdaBody(
-                ast.BinOp(
-                    left=self.__body.tree,
-                    op=op.ast_op,
-                    right=right,
-                ),
-                op.format(body_str, repr(other)),
-            ),
-            closure=self.__closure.chain([other]),
-            precedence=op.precedence,
-        )
-        return new
-
-    def __rop(self, op: Operation, other: Any) -> "LambdaBuilder":
-        body_str = (
-            f"({self.__body})"
-            if self.__precedence <= op.precedence
-            else str(self.__body)
-        )
-
-        left = ast.Subscript(
-            value=ast.Name(id="closure", ctx=ast.Load()),
-            slice=ast.Constant(value=len(self.__closure)),
-            ctx=ast.Load(),
-        )
-        new = LambdaBuilder(
-            self.__name,
-            LambdaBody(
-                ast.BinOp(left=left, op=op.ast_op, right=self.__body.tree),
+        if from_right:
+            new_body = LambdaBody(
+                op.operation(op.ast_op, other_ast, self.__body.tree),
                 op.format(repr(other), body_str),
-            ),
-            closure=self.__closure.chain([other]),
-            precedence=op.precedence,
-        )
-        return new
-
-    def __compare(self, op: Operation, other: Any) -> "LambdaBuilder":
-        body_str = (
-            f"({self.__body})"
-            if self.__precedence < op.precedence
-            else str(self.__body)
-        )
-
-        comparator = ast.Subscript(
-            value=ast.Name(id="closure", ctx=ast.Load()),
-            slice=ast.Constant(value=len(self.__closure)),
-            ctx=ast.Load(),
-        )
+            )
+        else:
+            new_body = LambdaBody(
+                op.operation(op.ast_op, self.__body.tree, other_ast),
+                op.format(body_str, repr(other)),
+            )
 
         return LambdaBuilder(
             self.__name,
-            LambdaBody(
-                ast.Compare(
-                    left=self.__body.tree, ops=[op.ast_op], comparators=[comparator]
-                ),
-                op.format(body_str, repr(other)),
-            ),
+            new_body,
             closure=self.__closure.chain([other]),
             precedence=op.precedence,
         )
@@ -236,100 +216,100 @@ class LambdaBuilder:
         )
 
     def __lt__(self, other: Any) -> "LambdaBuilder":
-        return self.__compare(Operation.LT, other)
+        return self.__op(Operation.LT, other)
 
     def __le__(self, other: Any) -> "LambdaBuilder":
-        return self.__compare(Operation.LE, other)
+        return self.__op(Operation.LE, other)
 
     def __eq__(self, other: Any) -> "LambdaBuilder":  # type: ignore
-        return self.__compare(Operation.EQ, other)
+        return self.__op(Operation.EQ, other)
 
     def __ne__(self, other: Any) -> "LambdaBuilder":  # type: ignore
-        return self.__compare(Operation.NE, other)
+        return self.__op(Operation.NE, other)
 
     def __ge__(self, other: Any) -> "LambdaBuilder":
-        return self.__compare(Operation.GE, other)
+        return self.__op(Operation.GE, other)
 
     def __gt__(self, other: Any) -> "LambdaBuilder":
-        return self.__compare(Operation.GT, other)
+        return self.__op(Operation.GT, other)
 
     def __or__(self, other: Any) -> "LambdaBuilder":
         return self.__op(Operation.OR, other)
 
     def __ror__(self, other: Any) -> "LambdaBuilder":
-        return self.__rop(Operation.OR, other)
+        return self.__op(Operation.OR, other, from_right=True)
 
     def __xor__(self, other: Any) -> "LambdaBuilder":
         return self.__op(Operation.XOR, other)
 
     def __rxor__(self, other: Any) -> "LambdaBuilder":
-        return self.__rop(Operation.XOR, other)
+        return self.__op(Operation.XOR, other, from_right=True)
 
     def __and__(self, other: Any) -> "LambdaBuilder":
         return self.__op(Operation.AND, other)
 
     def __rand__(self, other: Any) -> "LambdaBuilder":
-        return self.__rop(Operation.AND, other)
+        return self.__op(Operation.AND, other, from_right=True)
 
     def __lshift__(self, other: Any) -> "LambdaBuilder":
         return self.__op(Operation.LSHIFT, other)
 
     def __rlshift__(self, other: Any) -> "LambdaBuilder":
-        return self.__rop(Operation.LSHIFT, other)
+        return self.__op(Operation.LSHIFT, other, from_right=True)
 
     def __rshift__(self, other: Any) -> "LambdaBuilder":
         return self.__op(Operation.RSHIFT, other)
 
     def __rrshift__(self, other: Any) -> "LambdaBuilder":
-        return self.__rop(Operation.RSHIFT, other)
+        return self.__op(Operation.RSHIFT, other, from_right=True)
 
     def __add__(self, other: Any) -> "LambdaBuilder":
         return self.__op(Operation.ADD, other)
 
     def __radd__(self, other: Any) -> "LambdaBuilder":
-        return self.__rop(Operation.ADD, other)
+        return self.__op(Operation.ADD, other, from_right=True)
 
     def __sub__(self, other: Any) -> "LambdaBuilder":
         return self.__op(Operation.SUB, other)
 
     def __rsub__(self, other: Any) -> "LambdaBuilder":
-        return self.__rop(Operation.SUB, other)
+        return self.__op(Operation.SUB, other, from_right=True)
 
     def __mul__(self, other: Any) -> "LambdaBuilder":
         return self.__op(Operation.MUL, other)
 
     def __rmul__(self, other: Any) -> "LambdaBuilder":
-        return self.__rop(Operation.MUL, other)
+        return self.__op(Operation.MUL, other, from_right=True)
 
     def __truediv__(self, other: Any) -> "LambdaBuilder":
         return self.__op(Operation.TRUEDIV, other)
 
     def __rtruediv__(self, other: Any) -> "LambdaBuilder":
-        return self.__rop(Operation.TRUEDIV, other)
+        return self.__op(Operation.TRUEDIV, other, from_right=True)
 
     def __floordiv__(self, other: Any) -> "LambdaBuilder":
         return self.__op(Operation.FLOORDIV, other)
 
     def __rfloordiv__(self, other: Any) -> "LambdaBuilder":
-        return self.__rop(Operation.FLOORDIV, other)
+        return self.__op(Operation.FLOORDIV, other, from_right=True)
 
     def __mod__(self, other: Any) -> "LambdaBuilder":
         return self.__op(Operation.MOD, other)
 
     def __rmod__(self, other: Any) -> "LambdaBuilder":
-        return self.__rop(Operation.MOD, other)
+        return self.__op(Operation.MOD, other, from_right=True)
 
     def __matmul__(self, other: Any) -> "LambdaBuilder":
         return self.__op(Operation.MATMUL, other)
 
     def __rmatmul__(self, other: Any) -> "LambdaBuilder":
-        return self.__rop(Operation.MATMUL, other)
+        return self.__op(Operation.MATMUL, other, from_right=True)
 
     def __pow__(self, other: Any) -> "LambdaBuilder":
         return self.__op(Operation.POW, other)
 
     def __rpow__(self, other: Any) -> "LambdaBuilder":
-        return self.__rop(Operation.POW, other)
+        return self.__op(Operation.POW, other, from_right=True)
 
     def __call__(self, arg: Any) -> Any:
         func = self.__compile()

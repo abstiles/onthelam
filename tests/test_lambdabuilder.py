@@ -109,3 +109,7 @@ def test_arithmetic_precedence_parens():
     fn = (_ + 1) * 2
     assert repr(fn) == "_ -> (_ + 1) * 2"
     assert fn(3) == 8
+
+
+def test_chained_binary_op_and_compare():
+    assert list(filter(_ % 2 == 0, range(10))) == list(range(0, 10, 2))
