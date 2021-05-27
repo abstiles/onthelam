@@ -5,8 +5,9 @@ operations on the given argument.
 """
 
 import ast
-from collections import namedtuple
-from dataclasses import dataclass, field, InitVar
+import operator
+from enum import Enum
+from dataclasses import dataclass, field
 from typing import cast, Any, Callable, Iterator, NamedTuple, Optional
 from types import CodeType
 
@@ -57,6 +58,34 @@ OP_PRECEDENCE = {
 }
 
 
+class Operation(Enum):
+    """Represent an operation that can occur on an object"""
+
+    ADD = (10, "{} + {}", operator.add, ast.Add())
+    SUB = (10, "{} - {}", operator.sub, ast.Sub())
+    MUL = (11, "{} * {}", operator.mul, ast.Mult())
+    MATMUL = (11, "{} @ {}", operator.matmul, ast.MatMult())
+    TRUEDIV = (11, "{} / {}", operator.truediv, ast.Div())
+    FLOORDIV = (11, "{} // {}", operator.floordiv, ast.FloorDiv())
+    MOD = (11, "{} % {}", operator.mod, ast.Mod())
+
+    def __init__(
+        self,
+        precedence: int,
+        format_str: str,
+        operation: Callable[..., Any],
+        ast_op: ast.operator,
+    ):
+        self.precedence = precedence
+        self.format_str = format_str
+        self.operation = operation
+        self.ast_op = ast_op
+
+    def format(self, *args: str) -> str:
+        """Generate a string representation of an operation given its args"""
+        return self.format_str.format(*args)
+
+
 @dataclass(frozen=True)
 class LambdaBody:
     """The AST for a lambda and its string representation"""
@@ -67,7 +96,7 @@ class LambdaBody:
     def __repr__(self) -> str:
         return self._str
 
-    def compile(self, name) -> CodeType:
+    def compile(self, name: str) -> CodeType:
         """Create the code for a lambda with this object as its body"""
         lambda_ast = ast.Expression(
             ast.Lambda(
@@ -143,11 +172,17 @@ class LambdaBuilder:
     def __repr__(self) -> str:
         return f"{self.__name} -> {self.__body}"
 
-    def __op(self, op: str, other: Any) -> "LambdaBuilder":
+    def __op(self, op: Operation, other: Any) -> "LambdaBuilder":
         body_str = (
             f"({self.__body})"
-            if self.__precedence < OP_PRECEDENCE[op]
+            if self.__precedence < op.precedence
             else str(self.__body)
+        )
+
+        right = ast.Subscript(
+            value=ast.Name(id="closure", ctx=ast.Load()),
+            slice=ast.Constant(value=len(self.__closure)),
+            ctx=ast.Load(),
         )
 
         new = LambdaBuilder(
@@ -155,87 +190,80 @@ class LambdaBuilder:
             LambdaBody(
                 ast.BinOp(
                     left=self.__body.tree,
-                    op=OP_MAP[op],
-                    right=ast.Subscript(
-                        value=ast.Name(id="closure", ctx=ast.Load()),
-                        slice=ast.Constant(value=len(self.__closure)),
-                        ctx=ast.Load(),
-                    ),
+                    op=op.ast_op,
+                    right=right,
                 ),
-                f"{body_str} {op} {repr(other)}",
+                op.format(body_str, repr(other)),
             ),
             closure=self.__closure.chain([other]),
-            precedence=OP_PRECEDENCE[op],
+            precedence=op.precedence,
         )
         return new
 
-    def __rop(self, op: str, other: Any) -> "LambdaBuilder":
+    def __rop(self, op: Operation, other: Any) -> "LambdaBuilder":
         body_str = (
             f"({self.__body})"
-            if self.__precedence <= OP_PRECEDENCE[op]
+            if self.__precedence <= op.precedence
             else str(self.__body)
         )
 
+        left = ast.Subscript(
+            value=ast.Name(id="closure", ctx=ast.Load()),
+            slice=ast.Constant(value=len(self.__closure)),
+            ctx=ast.Load(),
+        )
         new = LambdaBuilder(
             self.__name,
             LambdaBody(
-                ast.BinOp(
-                    left=ast.Subscript(
-                        value=ast.Name(id="closure", ctx=ast.Load()),
-                        slice=ast.Constant(value=len(self.__closure)),
-                        ctx=ast.Load(),
-                    ),
-                    op=OP_MAP[op],
-                    right=self.__body.tree,
-                ),
-                f"{repr(other)} {op} {body_str}",
+                ast.BinOp(left=left, op=op.ast_op, right=self.__body.tree),
+                op.format(repr(other), body_str),
             ),
             closure=self.__closure.chain([other]),
-            precedence=OP_PRECEDENCE[op],
+            precedence=op.precedence,
         )
         return new
 
     def __add__(self, other: Any) -> "LambdaBuilder":
-        return self.__op("+", other)
+        return self.__op(Operation.ADD, other)
 
     def __radd__(self, other: Any) -> "LambdaBuilder":
-        return self.__rop("+", other)
+        return self.__rop(Operation.ADD, other)
 
     def __sub__(self, other: Any) -> "LambdaBuilder":
-        return self.__op("-", other)
+        return self.__op(Operation.SUB, other)
 
     def __rsub__(self, other: Any) -> "LambdaBuilder":
-        return self.__rop("-", other)
+        return self.__rop(Operation.SUB, other)
 
     def __mul__(self, other: Any) -> "LambdaBuilder":
-        return self.__op("*", other)
+        return self.__op(Operation.MUL, other)
 
     def __rmul__(self, other: Any) -> "LambdaBuilder":
-        return self.__rop("*", other)
+        return self.__rop(Operation.MUL, other)
 
     def __truediv__(self, other: Any) -> "LambdaBuilder":
-        return self.__op("/", other)
+        return self.__op(Operation.TRUEDIV, other)
 
     def __rtruediv__(self, other: Any) -> "LambdaBuilder":
-        return self.__rop("/", other)
+        return self.__rop(Operation.TRUEDIV, other)
 
     def __floordiv__(self, other: Any) -> "LambdaBuilder":
-        return self.__op("//", other)
+        return self.__op(Operation.FLOORDIV, other)
 
     def __rfloordiv__(self, other: Any) -> "LambdaBuilder":
-        return self.__rop("//", other)
+        return self.__rop(Operation.FLOORDIV, other)
 
     def __mod__(self, other: Any) -> "LambdaBuilder":
-        return self.__op("%", other)
+        return self.__op(Operation.MOD, other)
 
     def __rmod__(self, other: Any) -> "LambdaBuilder":
-        return self.__rop("%", other)
+        return self.__rop(Operation.MOD, other)
 
     def __matmul__(self, other: Any) -> "LambdaBuilder":
-        return self.__op("@", other)
+        return self.__op(Operation.MATMUL, other)
 
     def __rmatmul__(self, other: Any) -> "LambdaBuilder":
-        return self.__rop("@", other)
+        return self.__rop(Operation.MATMUL, other)
 
     def __call__(self, arg: Any) -> Any:
         func = self.__compile()
