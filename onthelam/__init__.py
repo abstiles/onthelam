@@ -325,6 +325,12 @@ class LambdaBuilder:
     def __rmatmul__(self, other: Any) -> "LambdaBuilder":
         return self.__rop(Operation.MATMUL, other)
 
+    def __pow__(self, other: Any) -> "LambdaBuilder":
+        return self.__op(Operation.POW, other)
+
+    def __rpow__(self, other: Any) -> "LambdaBuilder":
+        return self.__rop(Operation.POW, other)
+
     def __call__(self, arg: Any) -> Any:
         func = self.__compile()
         return func(arg)
