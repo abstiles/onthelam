@@ -8,7 +8,7 @@ import ast
 import operator
 from enum import Enum
 from dataclasses import dataclass, field
-from typing import cast, Any, Callable, Iterator, NamedTuple, Optional
+from typing import cast, Any, Callable, Iterator, NamedTuple, Optional, NoReturn
 from types import CodeType
 
 
@@ -17,13 +17,15 @@ from types import CodeType
 class Operation(Enum):
     """Represent an operation that can occur on an object"""
 
-    IN = (5, "{1} in {0}", operator.contains, ast.In())
+    # These first few are Compares, not BinaryOps, and require special handling.
     LT = (5, "{} < {}", operator.lt, ast.Lt())
     LE = (5, "{} <= {}", operator.le, ast.LtE())
     EQ = (5, "{} == {}", operator.eq, ast.Eq())
     NE = (5, "{} != {}", operator.ne, ast.NotEq())
     GE = (5, "{} >= {}", operator.ge, ast.GtE())
     GT = (5, "{} > {}", operator.gt, ast.Gt())
+
+    # The BinaryOps
     OR = (6, "{} | {}", operator.or_, ast.BitOr())
     XOR = (7, "{} ^ {}", operator.xor, ast.BitXor())
     AND = (8, "{} & {}", operator.and_, ast.BitAnd())
@@ -42,6 +44,7 @@ class Operation(Enum):
     POS = (12, "-{}", operator.pos, ast.UAdd())
     INVERT = (12, "~{}", operator.invert, ast.Invert())
 
+    # Another BinaryOp
     POW = (13, "{} ** {}", operator.pow, ast.Pow())
 
     # The folowing are not considered BinaryOps and require special handling.
@@ -201,6 +204,84 @@ class LambdaBuilder:
             precedence=op.precedence,
         )
         return new
+
+    def __compare(self, op: Operation, other: Any) -> "LambdaBuilder":
+        body_str = (
+            f"({self.__body})"
+            if self.__precedence < op.precedence
+            else str(self.__body)
+        )
+
+        comparator = ast.Subscript(
+            value=ast.Name(id="closure", ctx=ast.Load()),
+            slice=ast.Constant(value=len(self.__closure)),
+            ctx=ast.Load(),
+        )
+
+        return LambdaBuilder(
+            self.__name,
+            LambdaBody(
+                ast.Compare(
+                    left=self.__body.tree, ops=[op.ast_op], comparators=[comparator]
+                ),
+                op.format(body_str, repr(other)),
+            ),
+            closure=self.__closure.chain([other]),
+            precedence=op.precedence,
+        )
+
+    def __bool__(self) -> NoReturn:
+        raise NotImplementedError(
+            "This object should not be directly tested for truthiness"
+        )
+
+    def __lt__(self, other: Any) -> "LambdaBuilder":
+        return self.__compare(Operation.LT, other)
+
+    def __le__(self, other: Any) -> "LambdaBuilder":
+        return self.__compare(Operation.LE, other)
+
+    def __eq__(self, other: Any) -> "LambdaBuilder":  # type: ignore
+        return self.__compare(Operation.EQ, other)
+
+    def __ne__(self, other: Any) -> "LambdaBuilder":  # type: ignore
+        return self.__compare(Operation.NE, other)
+
+    def __ge__(self, other: Any) -> "LambdaBuilder":
+        return self.__compare(Operation.GE, other)
+
+    def __gt__(self, other: Any) -> "LambdaBuilder":
+        return self.__compare(Operation.GT, other)
+
+    def __or__(self, other: Any) -> "LambdaBuilder":
+        return self.__op(Operation.OR, other)
+
+    def __ror__(self, other: Any) -> "LambdaBuilder":
+        return self.__rop(Operation.OR, other)
+
+    def __xor__(self, other: Any) -> "LambdaBuilder":
+        return self.__op(Operation.XOR, other)
+
+    def __rxor__(self, other: Any) -> "LambdaBuilder":
+        return self.__rop(Operation.XOR, other)
+
+    def __and__(self, other: Any) -> "LambdaBuilder":
+        return self.__op(Operation.AND, other)
+
+    def __rand__(self, other: Any) -> "LambdaBuilder":
+        return self.__rop(Operation.AND, other)
+
+    def __lshift__(self, other: Any) -> "LambdaBuilder":
+        return self.__op(Operation.LSHIFT, other)
+
+    def __rlshift__(self, other: Any) -> "LambdaBuilder":
+        return self.__rop(Operation.LSHIFT, other)
+
+    def __rshift__(self, other: Any) -> "LambdaBuilder":
+        return self.__op(Operation.RSHIFT, other)
+
+    def __rrshift__(self, other: Any) -> "LambdaBuilder":
+        return self.__rop(Operation.RSHIFT, other)
 
     def __add__(self, other: Any) -> "LambdaBuilder":
         return self.__op(Operation.ADD, other)

@@ -23,6 +23,11 @@ def test_invalid_name():
         LambdaBuilder("123")
 
 
+def test_bools_bad():
+    with pytest.raises(NotImplementedError):
+        bool(_)
+
+
 OBJ = MagicMock()
 
 
@@ -43,6 +48,29 @@ OBJ = MagicMock()
         (lambda: 2 % _, "2 % _", 5, 2 % 5),
         (lambda: _ @ 2, "_ @ 2", OBJ, OBJ @ 2),
         (lambda: 2 @ _, "2 @ _", OBJ, 2 @ OBJ),
+        (lambda: _ == 2, "_ == 2", 2, 2 == 2),
+        (lambda: _ == 2, "_ == 2", 1, 1 == 2),
+        (lambda: _ != 2, "_ != 2", 2, 2 != 2),
+        (lambda: _ != 2, "_ != 2", 1, 1 != 2),
+        (lambda: _ < 2, "_ < 2", 1, 1 < 2),
+        (lambda: _ < 2, "_ < 2", 2, 2 < 2),
+        (lambda: _ <= 2, "_ <= 2", 2, 2 <= 2),
+        (lambda: _ <= 2, "_ <= 2", 3, 3 <= 2),
+        (lambda: _ > 2, "_ > 2", 1, 1 > 2),
+        (lambda: _ > 2, "_ > 2", 3, 3 > 2),
+        (lambda: _ >= 2, "_ >= 2", 1, 1 >= 2),
+        (lambda: _ >= 2, "_ >= 2", 2, 2 >= 2),
+        # 12 and 10 chosen to maximize bit pattern combinations.
+        (lambda: _ | 12, "_ | 12", 10, 0b1010 | 0b1100),
+        (lambda: 12 | _, "12 | _", 10, 0b1100 | 0b1010),
+        (lambda: _ & 12, "_ & 12", 10, 0b1010 & 0b1100),
+        (lambda: 12 & _, "12 & _", 10, 0b1100 & 0b1010),
+        (lambda: _ ^ 12, "_ ^ 12", 10, 0b1010 ^ 0b1100),
+        (lambda: 12 ^ _, "12 ^ _", 10, 0b1100 ^ 0b1010),
+        (lambda: _ << 2, "_ << 2", 3, 3 << 2),
+        (lambda: 2 << _, "2 << _", 3, 2 << 3),
+        (lambda: _ >> 2, "_ >> 2", 12, 12 >> 2),
+        (lambda: 2 >> _, "2 >> _", 1, 2 >> 1),
     ],
 )
 def test_basic_ops(expr, body_str, arg, result):
