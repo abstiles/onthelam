@@ -11,56 +11,24 @@ from dataclasses import dataclass, field
 from typing import cast, Any, Callable, Iterator, NamedTuple, Optional
 from types import CodeType
 
-OP_MAP = {
-    "+": ast.Add(),
-    "-": ast.Sub(),
-    "*": ast.Mult(),
-    "@": ast.MatMult(),
-    "/": ast.Div(),
-    "//": ast.FloorDiv(),
-    "%": ast.Mod(),
-}
 
-# Referenced from https://docs.python.org/3/reference/expressions.html#operator-precedence
-OP_PRECEDENCE = {
-    "bool": 1,
-    "or": 2,
-    "and": 3,
-    "not": 4,
-    "in": 5,
-    "is": 5,
-    "<": 5,
-    "<=": 5,
-    "==": 5,
-    "!=": 5,
-    ">=": 5,
-    ">": 5,
-    "|": 6,
-    "^": 7,
-    "&": 8,
-    "<<": 9,
-    ">>": 9,
-    "+": 10,
-    "-": 10,
-    "*": 11,
-    "@": 11,
-    "/": 11,
-    "//": 11,
-    "%": 11,
-    "+x": 12,
-    "-x": 12,
-    "~x": 12,
-    "**": 13,
-    "await": 14,
-    "[]": 15,
-    ".": 15,
-    "x()": 15,
-}
-
-
+# Precedence rules referenced from:
+# https://docs.python.org/3/reference/expressions.html#operator-precedence
 class Operation(Enum):
     """Represent an operation that can occur on an object"""
 
+    IN = (5, "{1} in {0}", operator.contains, ast.In())
+    LT = (5, "{} < {}", operator.lt, ast.Lt())
+    LE = (5, "{} <= {}", operator.le, ast.LtE())
+    EQ = (5, "{} == {}", operator.eq, ast.Eq())
+    NE = (5, "{} != {}", operator.ne, ast.NotEq())
+    GE = (5, "{} >= {}", operator.ge, ast.GtE())
+    GT = (5, "{} > {}", operator.gt, ast.Gt())
+    OR = (6, "{} | {}", operator.or_, ast.BitOr())
+    XOR = (7, "{} ^ {}", operator.xor, ast.BitXor())
+    AND = (8, "{} & {}", operator.and_, ast.BitAnd())
+    LSHIFT = (9, "{} << {}", operator.lshift, ast.LShift())
+    RSHIFT = (9, "{} >> {}", operator.rshift, ast.RShift())
     ADD = (10, "{} + {}", operator.add, ast.Add())
     SUB = (10, "{} - {}", operator.sub, ast.Sub())
     MUL = (11, "{} * {}", operator.mul, ast.Mult())
@@ -68,6 +36,17 @@ class Operation(Enum):
     TRUEDIV = (11, "{} / {}", operator.truediv, ast.Div())
     FLOORDIV = (11, "{} // {}", operator.floordiv, ast.FloorDiv())
     MOD = (11, "{} % {}", operator.mod, ast.Mod())
+
+    # The following unary operations require special handling
+    NEG = (12, "+{}", operator.neg, ast.USub())
+    POS = (12, "-{}", operator.pos, ast.UAdd())
+    INVERT = (12, "~{}", operator.invert, ast.Invert())
+
+    POW = (13, "{} ** {}", operator.pow, ast.Pow())
+
+    # The folowing are not considered BinaryOps and require special handling.
+    GETITEM = (15, "{}[{}]", operator.getitem, ast.Subscript())
+    GETATTR = (15, "{}.{}", getattr, ast.Attribute())
 
     def __init__(
         self,
