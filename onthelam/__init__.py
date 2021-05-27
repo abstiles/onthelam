@@ -62,13 +62,9 @@ class Operation(Enum):
     TRUEDIV = (11, "{} / {}", bin_op, ast.Div())
     FLOORDIV = (11, "{} // {}", bin_op, ast.FloorDiv())
     MOD = (11, "{} % {}", bin_op, ast.Mod())
-
-    # The following unary operations require special handling
-    NEG = (12, "+{}", unary_op, ast.USub())
-    POS = (12, "-{}", unary_op, ast.UAdd())
+    NEG = (12, "-{}", unary_op, ast.USub())
+    POS = (12, "+{}", unary_op, ast.UAdd())
     INVERT = (12, "~{}", unary_op, ast.Invert())
-
-    # Another BinaryOp
     POW = (13, "{} ** {}", bin_op, ast.Pow())
 
     # The folowing are not considered BinaryOps and require special handling.
@@ -96,7 +92,7 @@ class Operation(Enum):
 class LambdaBody:
     """The AST for a lambda and its string representation"""
 
-    tree: ast.AST
+    tree: ast.expr
     _str: str
 
     def __repr__(self) -> str:
@@ -210,6 +206,20 @@ class LambdaBuilder:
             precedence=op.precedence,
         )
 
+    def __uop(self, op: Operation) -> "LambdaBuilder":
+        do_paren = self.__precedence <= op.precedence
+        body_str = f"({self.__body})" if do_paren else str(self.__body)
+
+        return LambdaBuilder(
+            self.__name,
+            LambdaBody(
+                unary_op(op.ast_op, self.__body.tree),
+                op.format(body_str),
+            ),
+            closure=self.__closure,
+            precedence=op.precedence,
+        )
+
     def __bool__(self) -> NoReturn:
         raise NotImplementedError(
             "This object should not be directly tested for truthiness"
@@ -310,6 +320,15 @@ class LambdaBuilder:
 
     def __rpow__(self, other: Any) -> "LambdaBuilder":
         return self.__op(Operation.POW, other, from_right=True)
+
+    def __pos__(self) -> "LambdaBuilder":
+        return self.__uop(Operation.POS)
+
+    def __neg__(self) -> "LambdaBuilder":
+        return self.__uop(Operation.NEG)
+
+    def __invert__(self) -> "LambdaBuilder":
+        return self.__uop(Operation.INVERT)
 
     def __call__(self, arg: Any) -> Any:
         func = self.__compile()

@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+
+mypy onthelam && pylint onthelam && (black --check onthelam || (black --diff onthelam; false))
