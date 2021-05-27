@@ -12,6 +12,17 @@ def test_simple_identity():
     assert fn(5) == 5
 
 
+def test_rename():
+    fn = LambdaBuilder("x")
+    assert repr(fn) == "x -> x"
+    assert fn(5) == 5
+
+
+def test_invalid_name():
+    with pytest.raises(ValueError):
+        LambdaBuilder("123")
+
+
 OBJ = MagicMock()
 
 

@@ -6,8 +6,9 @@ operations on the given argument.
 
 import ast
 from collections import namedtuple
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, InitVar
 from typing import cast, Any, Callable, Iterator, NamedTuple, Optional
+from types import CodeType
 
 OP_MAP = {
     "+": ast.Add(),
@@ -56,11 +57,35 @@ OP_PRECEDENCE = {
 }
 
 
-class LambdaBody(NamedTuple):
+@dataclass(frozen=True)
+class LambdaBody:
     """The AST for a lambda and its string representation"""
 
     tree: ast.AST
-    code_str: str
+    _str: str
+
+    def __repr__(self) -> str:
+        return self._str
+
+    def compile(self, name) -> CodeType:
+        """Create the code for a lambda with this object as its body"""
+        lambda_ast = ast.Expression(
+            ast.Lambda(
+                args=ast.arguments(
+                    posonlyargs=[ast.arg(arg=name)],
+                    args=[],
+                    kwonlyargs=[],
+                    kw_defaults=[],
+                    defaults=[],
+                ),
+                body=self.tree,
+            )
+        )
+        lambda_ast = ast.fix_missing_locations(lambda_ast)
+        code = compile(lambda_ast, "<LambdaBuilder>", mode="eval")
+        # Unclear why Mypy thinks the "compile" function returns anything other
+        # than a code object.
+        return cast(CodeType, code)
 
 
 @dataclass(frozen=True)
@@ -101,27 +126,32 @@ class LambdaBuilder:
 
     def __init__(
         self,
+        name: str,
         body: Optional[LambdaBody] = None,
         closure: ClosureChain = ClosureChain.new(),
         precedence: int = 100,
     ):
+        if not name.isidentifier():
+            raise ValueError("name must be a valid Python identifier")
+        self.__name = name
         if not body:
-            body = LambdaBody(ast.Name(id="_", ctx=ast.Load()), code_str="_")
+            body = LambdaBody(ast.Name(id=name, ctx=ast.Load()), name)
         self.__body = body
         self.__closure = closure
         self.__precedence = precedence
 
     def __repr__(self) -> str:
-        return "_ -> " + self.__body.code_str
+        return f"{self.__name} -> {self.__body}"
 
     def __op(self, op: str, other: Any) -> "LambdaBuilder":
         body_str = (
-            f"({self.__body.code_str})"
+            f"({self.__body})"
             if self.__precedence < OP_PRECEDENCE[op]
-            else self.__body.code_str
+            else str(self.__body)
         )
 
         new = LambdaBuilder(
+            self.__name,
             LambdaBody(
                 ast.BinOp(
                     left=self.__body.tree,
@@ -132,7 +162,7 @@ class LambdaBuilder:
                         ctx=ast.Load(),
                     ),
                 ),
-                code_str=(f"{body_str} {op} {repr(other)}"),
+                f"{body_str} {op} {repr(other)}",
             ),
             closure=self.__closure.chain([other]),
             precedence=OP_PRECEDENCE[op],
@@ -141,12 +171,13 @@ class LambdaBuilder:
 
     def __rop(self, op: str, other: Any) -> "LambdaBuilder":
         body_str = (
-            f"({self.__body.code_str})"
+            f"({self.__body})"
             if self.__precedence <= OP_PRECEDENCE[op]
-            else self.__body.code_str
+            else str(self.__body)
         )
 
         new = LambdaBuilder(
+            self.__name,
             LambdaBody(
                 ast.BinOp(
                     left=ast.Subscript(
@@ -157,7 +188,7 @@ class LambdaBuilder:
                     op=OP_MAP[op],
                     right=self.__body.tree,
                 ),
-                code_str=(f"{repr(other)} {op} {body_str}"),
+                f"{repr(other)} {op} {body_str}",
             ),
             closure=self.__closure.chain([other]),
             precedence=OP_PRECEDENCE[op],
@@ -211,21 +242,7 @@ class LambdaBuilder:
         return func(arg)
 
     def __compile(self) -> Callable[[Any], Any]:
-        ast_object = ast.Expression(
-            ast.Lambda(
-                args=ast.arguments(
-                    posonlyargs=[ast.arg(arg="_")],
-                    args=[],
-                    kwonlyargs=[],
-                    kw_defaults=[],
-                    defaults=[],
-                ),
-                body=self.__body.tree,
-            )
-        )
-        code = compile(
-            ast.fix_missing_locations(ast_object), "<LambdaBuilder>", mode="eval"
-        )
+        code = self.__body.compile(self.__name)
         closure = list(self.__closure)
         # Evaluating the AST we generate is key to the functioning of this
         # object, so we ignore the eval warning here.
@@ -236,4 +253,4 @@ class LambdaBuilder:
         return cast(Callable[[Any], Any], func)
 
 
-_ = LambdaBuilder()
+_ = LambdaBuilder("_")
