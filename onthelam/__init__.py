@@ -23,19 +23,31 @@ from typing import (
 from types import CodeType
 
 
-def compare(op: ast.operator, left: ast.expr, right: ast.expr) -> ast.Compare:
+def compare(op: ast.cmpop) -> Callable[[ast.expr, ast.expr], ast.Compare]:
     """Generate an ast comparison"""
-    return ast.Compare(left=left, ops=[op], comparators=[right])
+
+    def _compare(left: ast.expr, right: ast.expr) -> ast.Compare:
+        return ast.Compare(left=left, ops=[op], comparators=[right])
+
+    return _compare
 
 
-def bin_op(op: ast.operator, left: ast.expr, right: ast.expr) -> ast.BinOp:
+def bin_op(op: ast.operator) -> Callable[[ast.expr, ast.expr], ast.BinOp]:
     """Generate an ast binary operation"""
-    return ast.BinOp(left=left, op=op, right=right)
+
+    def _bin_op(left: ast.expr, right: ast.expr) -> ast.BinOp:
+        return ast.BinOp(left=left, op=op, right=right)
+
+    return _bin_op
 
 
-def unary_op(op: ast.operator, operand: ast.expr) -> ast.UnaryOp:
+def unary_op(op: ast.unaryop) -> Callable[[ast.expr], ast.UnaryOp]:
     """Generate an ast unary operation"""
-    return ast.UnaryOp(op=op, operand=operand)
+
+    def _unary_op(operand: ast.expr) -> ast.UnaryOp:
+        return ast.UnaryOp(op=op, operand=operand)
+
+    return _unary_op
 
 
 def subscript(value: ast.expr, idx: ast.expr) -> ast.Subscript:
@@ -48,51 +60,46 @@ def attribute(value: ast.expr, attr: str) -> ast.Attribute:
     return ast.Attribute(value=value, attr=attr, ctx=ast.Load())
 
 
-NothingOperator = ast.operator()
-
-
 # Precedence rules referenced from:
 # https://docs.python.org/3/reference/expressions.html#operator-precedence
 class Operation(Enum):
     """Represent an operation that can occur on an object"""
 
-    LT = (5, "{} < {}", compare, ast.Lt())
-    LE = (5, "{} <= {}", compare, ast.LtE())
-    EQ = (5, "{} == {}", compare, ast.Eq())
-    NE = (5, "{} != {}", compare, ast.NotEq())
-    GE = (5, "{} >= {}", compare, ast.GtE())
-    GT = (5, "{} > {}", compare, ast.Gt())
-    OR = (6, "{} | {}", bin_op, ast.BitOr())
-    XOR = (7, "{} ^ {}", bin_op, ast.BitXor())
-    AND = (8, "{} & {}", bin_op, ast.BitAnd())
-    LSHIFT = (9, "{} << {}", bin_op, ast.LShift())
-    RSHIFT = (9, "{} >> {}", bin_op, ast.RShift())
-    ADD = (10, "{} + {}", bin_op, ast.Add())
-    SUB = (10, "{} - {}", bin_op, ast.Sub())
-    MUL = (11, "{} * {}", bin_op, ast.Mult())
-    MATMUL = (11, "{} @ {}", bin_op, ast.MatMult())
-    TRUEDIV = (11, "{} / {}", bin_op, ast.Div())
-    FLOORDIV = (11, "{} // {}", bin_op, ast.FloorDiv())
-    MOD = (11, "{} % {}", bin_op, ast.Mod())
-    NEG = (12, "-{}", unary_op, ast.USub())
-    POS = (12, "+{}", unary_op, ast.UAdd())
-    INVERT = (12, "~{}", unary_op, ast.Invert())
-    POW = (13, "{} ** {}", bin_op, ast.Pow())
+    LT = (5, "{} < {}", compare(ast.Lt()))
+    LE = (5, "{} <= {}", compare(ast.LtE()))
+    EQ = (5, "{} == {}", compare(ast.Eq()))
+    NE = (5, "{} != {}", compare(ast.NotEq()))
+    GE = (5, "{} >= {}", compare(ast.GtE()))
+    GT = (5, "{} > {}", compare(ast.Gt()))
+    OR = (6, "{} | {}", bin_op(ast.BitOr()))
+    XOR = (7, "{} ^ {}", bin_op(ast.BitXor()))
+    AND = (8, "{} & {}", bin_op(ast.BitAnd()))
+    LSHIFT = (9, "{} << {}", bin_op(ast.LShift()))
+    RSHIFT = (9, "{} >> {}", bin_op(ast.RShift()))
+    ADD = (10, "{} + {}", bin_op(ast.Add()))
+    SUB = (10, "{} - {}", bin_op(ast.Sub()))
+    MUL = (11, "{} * {}", bin_op(ast.Mult()))
+    MATMUL = (11, "{} @ {}", bin_op(ast.MatMult()))
+    TRUEDIV = (11, "{} / {}", bin_op(ast.Div()))
+    FLOORDIV = (11, "{} // {}", bin_op(ast.FloorDiv()))
+    MOD = (11, "{} % {}", bin_op(ast.Mod()))
+    NEG = (12, "-{}", unary_op(ast.USub()))
+    POS = (12, "+{}", unary_op(ast.UAdd()))
+    INVERT = (12, "~{}", unary_op(ast.Invert()))
+    POW = (13, "{} ** {}", bin_op(ast.Pow()))
 
     # The folowing are not considered BinaryOps and require special handling.
-    GETITEM = (15, "{}[{}]", subscript, NothingOperator)
-    GETATTR = (15, "{}.{}", attribute, NothingOperator)
+    GETITEM = (15, "{}[{}]", subscript)
+    GETATTR = (15, "{}.{}", attribute)
 
     def __init__(
         self,
         precedence: int,
         format_str: str,
-        operation: Callable[..., ast.expr],
-        ast_op: ast.operator,
+        ast_op: Callable[..., ast.expr],
     ):
         self.precedence = precedence
         self.format_str = format_str
-        self.operation = operation
         self.ast_op = ast_op
 
     def render(self, *args: str) -> str:
@@ -258,9 +265,9 @@ class LambdaBuilder:
             new_closure = self.__lambda.closure.chain([other])
 
         if from_right:
-            new_tree = op.operation(op.ast_op, other_ast, self.__lambda.tree)
+            new_tree = op.ast_op(other_ast, self.__lambda.tree)
         else:
-            new_tree = op.operation(op.ast_op, self.__lambda.tree, other_ast)
+            new_tree = op.ast_op(self.__lambda.tree, other_ast)
         body_str = self.render(other, op, from_right=from_right)
 
         return LambdaBuilder(
@@ -280,7 +287,7 @@ class LambdaBuilder:
         return LambdaBuilder(
             Lambda(
                 self.__lambda.name,
-                unary_op(op.ast_op, self.__lambda.tree),
+                op.ast_op(self.__lambda.tree),
                 self.__lambda.closure,
                 op.render(body_str),
             ),
@@ -295,7 +302,7 @@ class LambdaBuilder:
 
         if op is Operation.GETATTR:
             body_str = op.render(body_str, str(other))
-            new_tree = op.operation(self.__lambda.tree, str(other))
+            new_tree = op.ast_op(self.__lambda.tree, str(other))
             new_closure = self.__lambda.closure
         elif op is Operation.GETITEM:
             other_ast = ast.Subscript(
@@ -304,7 +311,7 @@ class LambdaBuilder:
                 ctx=ast.Load(),
             )
             body_str = op.render(body_str, repr(other))
-            new_tree = op.operation(self.__lambda.tree, other_ast)
+            new_tree = op.ast_op(self.__lambda.tree, other_ast)
             new_closure = self.__lambda.closure.chain([other])
 
         return LambdaBuilder(
