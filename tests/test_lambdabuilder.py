@@ -118,3 +118,15 @@ def test_arithmetic_precedence_parens():
 
 def test_chained_binary_op_and_compare():
     assert list(filter(_ % 2 == 0, range(10))) == list(range(0, 10, 2))
+
+
+def test_repeated():
+    fn = _ + _
+    assert repr(fn) == "_ -> _ + _"
+    assert fn(3) == 6
+
+
+def test_repeated_with_merged_closures():
+    fn = (_ + 2) * (_ + 3)
+    assert repr(fn) == "_ -> (_ + 2) * (_ + 3)"
+    assert fn(3) == 30

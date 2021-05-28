@@ -5,6 +5,7 @@ operations on the given argument.
 """
 
 import ast
+from copy import deepcopy
 from enum import Enum
 from dataclasses import dataclass, field
 from typing import (
@@ -12,6 +13,7 @@ from typing import (
     Any,
     Callable,
     Iterator,
+    Iterable,
     Literal,
     NamedTuple,
     Optional,
@@ -121,9 +123,9 @@ class ClosureChain:
     def __len__(self) -> int:
         return self.size
 
-    def chain(self, next_values: list[Any]) -> "ClosureChain":
+    def chain(self, next_values: Iterable[Any]) -> "ClosureChain":
         """Add another chunk of values to the end of the chain"""
-        return ClosureChain(next_values, self)
+        return ClosureChain(list(next_values), self)
 
     @classmethod
     def new(cls) -> "ClosureChain":
@@ -141,6 +143,10 @@ class Lambda:
     body_str: str
 
     def __repr__(self) -> str:
+        return f"{self.body_str}"
+
+    def render(self) -> str:
+        """Render the user-friendly lambda definition"""
         return f"{self.name} -> {self.body_str}"
 
     def compile(self, name: str) -> CodeType:
@@ -187,7 +193,49 @@ class LambdaBuilder:
         self.__precedence = precedence
 
     def __repr__(self) -> str:
-        return repr(self.__lambda)
+        return self.__lambda.render()
+
+    def render(
+        self, item: Any, op: Optional[Operation] = None, from_right: bool = False
+    ) -> str:
+        """Render an item, optionally with an operator in a user friendly way"""
+        if isinstance(item, LambdaBuilder):
+            item_precedence = item.__precedence  # pylint: disable=protected-access
+            item = item.__lambda  # pylint: disable=protected-access
+
+        if not op:
+            return repr(item)
+
+        do_paren = self.__precedence < op.precedence or (
+            from_right and self.__precedence == op.precedence
+        )
+        body_str = f"({self.__lambda})" if do_paren else repr(self.__lambda)
+
+        if isinstance(item, Lambda):
+            do_paren = item_precedence < op.precedence or (
+                not from_right and item_precedence == op.precedence
+            )
+            other_body_str = f"({item})" if do_paren else repr(item)
+        else:
+            other_body_str = self.render(item)
+
+        if from_right:
+            return op.render(other_body_str, body_str)
+        return op.render(body_str, other_body_str)
+
+    def update_appended_closure_idxs(self, tree: ast.expr) -> ast.expr:
+        """Update the indexes of the given tree to start after this closure"""
+        new_tree = deepcopy(tree)
+        base = len(self.__lambda.closure)
+        for node in ast.walk(new_tree):
+            if (
+                isinstance(node, ast.Subscript)
+                and isinstance(node.value, ast.Name)
+                and node.value.id == "closure"
+                and isinstance(node.slice, ast.Constant)
+            ):
+                node.slice.value += base
+        return new_tree
 
     def __op(
         self, op: Operation, other: Any, from_right: bool = False
@@ -195,26 +243,31 @@ class LambdaBuilder:
         do_paren = self.__precedence < op.precedence or (
             from_right and self.__precedence == op.precedence
         )
-        body_str = f"({self.__lambda.body_str})" if do_paren else self.__lambda.body_str
+        body_str = f"({self.__lambda})" if do_paren else repr(self.__lambda)
 
-        other_ast = ast.Subscript(
-            value=ast.Name(id="closure", ctx=ast.Load()),
-            slice=ast.Constant(value=len(self.__lambda.closure)),
-            ctx=ast.Load(),
-        )
+        if isinstance(other, LambdaBuilder):
+            other_lambda = other.__lambda  # pylint: disable=protected-access
+            other_ast = self.update_appended_closure_idxs(other_lambda.tree)
+            new_closure = self.__lambda.closure.chain(other_lambda.closure)
+        else:
+            other_ast = ast.Subscript(
+                value=ast.Name(id="closure", ctx=ast.Load()),
+                slice=ast.Constant(value=len(self.__lambda.closure)),
+                ctx=ast.Load(),
+            )
+            new_closure = self.__lambda.closure.chain([other])
 
         if from_right:
             new_tree = op.operation(op.ast_op, other_ast, self.__lambda.tree)
-            body_str = op.render(repr(other), body_str)
         else:
             new_tree = op.operation(op.ast_op, self.__lambda.tree, other_ast)
-            body_str = op.render(body_str, repr(other))
+        body_str = self.render(other, op, from_right=from_right)
 
         return LambdaBuilder(
             Lambda(
                 self.__lambda.name,
                 new_tree,
-                self.__lambda.closure.chain([other]),
+                new_closure,
                 body_str,
             ),
             precedence=op.precedence,
@@ -222,7 +275,7 @@ class LambdaBuilder:
 
     def __uop(self, op: Operation) -> "LambdaBuilder":
         do_paren = self.__precedence <= op.precedence
-        body_str = f"({self.__lambda.body_str})" if do_paren else self.__lambda.body_str
+        body_str = f"({self.__lambda})" if do_paren else repr(self.__lambda)
 
         return LambdaBuilder(
             Lambda(
@@ -238,7 +291,7 @@ class LambdaBuilder:
         self, op: Union[Literal[Operation.GETATTR, Operation.GETITEM]], other: Any
     ) -> "LambdaBuilder":
         do_paren = self.__precedence <= op.precedence
-        body_str = f"({self.__lambda.body_str})" if do_paren else self.__lambda.body_str
+        body_str = f"({self.__lambda})" if do_paren else repr(self.__lambda)
 
         if op is Operation.GETATTR:
             body_str = op.render(body_str, str(other))
