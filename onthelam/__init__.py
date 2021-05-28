@@ -7,7 +7,31 @@ operations on the given argument.
 import ast
 from copy import deepcopy
 from enum import Enum
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from operator import (
+    add,
+    and_,
+    eq,
+    floordiv,
+    ge,
+    getitem,
+    gt,
+    invert,
+    le,
+    lshift,
+    lt,
+    matmul,
+    mod,
+    mul,
+    ne,
+    neg,
+    or_,
+    pos,
+    rshift,
+    sub,
+    truediv,
+    xor,
+)
 from typing import (
     cast,
     Any,
@@ -60,49 +84,68 @@ def attribute(value: ast.expr, attr: str) -> ast.Attribute:
     return ast.Attribute(value=value, attr=attr, ctx=ast.Load())
 
 
+def name(value: str) -> ast.Name:
+    """Generate an ast name expression"""
+    if not value.isidentifier():
+        raise ValueError("name must be a valid Python identifier")
+    return ast.Name(id=value, ctx=ast.Load())
+
+
+UnaryFunction = Callable[[Any], Any]
+BinaryFunction = Callable[[Any, Any], Any]
+
+
 # Precedence rules referenced from:
 # https://docs.python.org/3/reference/expressions.html#operator-precedence
 class Operation(Enum):
     """Represent an operation that can occur on an object"""
 
-    LT = (5, "{} < {}", compare(ast.Lt()))
-    LE = (5, "{} <= {}", compare(ast.LtE()))
-    EQ = (5, "{} == {}", compare(ast.Eq()))
-    NE = (5, "{} != {}", compare(ast.NotEq()))
-    GE = (5, "{} >= {}", compare(ast.GtE()))
-    GT = (5, "{} > {}", compare(ast.Gt()))
-    OR = (6, "{} | {}", bin_op(ast.BitOr()))
-    XOR = (7, "{} ^ {}", bin_op(ast.BitXor()))
-    AND = (8, "{} & {}", bin_op(ast.BitAnd()))
-    LSHIFT = (9, "{} << {}", bin_op(ast.LShift()))
-    RSHIFT = (9, "{} >> {}", bin_op(ast.RShift()))
-    ADD = (10, "{} + {}", bin_op(ast.Add()))
-    SUB = (10, "{} - {}", bin_op(ast.Sub()))
-    MUL = (11, "{} * {}", bin_op(ast.Mult()))
-    MATMUL = (11, "{} @ {}", bin_op(ast.MatMult()))
-    TRUEDIV = (11, "{} / {}", bin_op(ast.Div()))
-    FLOORDIV = (11, "{} // {}", bin_op(ast.FloorDiv()))
-    MOD = (11, "{} % {}", bin_op(ast.Mod()))
-    NEG = (12, "-{}", unary_op(ast.USub()))
-    POS = (12, "+{}", unary_op(ast.UAdd()))
-    INVERT = (12, "~{}", unary_op(ast.Invert()))
-    POW = (13, "{} ** {}", bin_op(ast.Pow()))
+    LT = (5, "{} < {}", compare(ast.Lt()), lt)
+    LE = (5, "{} <= {}", compare(ast.LtE()), le)
+    EQ = (5, "{} == {}", compare(ast.Eq()), eq)
+    NE = (5, "{} != {}", compare(ast.NotEq()), ne)
+    GE = (5, "{} >= {}", compare(ast.GtE()), ge)
+    GT = (5, "{} > {}", compare(ast.Gt()), gt)
+    OR = (6, "{} | {}", bin_op(ast.BitOr()), or_)
+    XOR = (7, "{} ^ {}", bin_op(ast.BitXor()), xor)
+    AND = (8, "{} & {}", bin_op(ast.BitAnd()), and_)
+    LSHIFT = (9, "{} << {}", bin_op(ast.LShift()), lshift)
+    RSHIFT = (9, "{} >> {}", bin_op(ast.RShift()), rshift)
+    ADD = (10, "{} + {}", bin_op(ast.Add()), add)
+    SUB = (10, "{} - {}", bin_op(ast.Sub()), sub)
+    MUL = (11, "{} * {}", bin_op(ast.Mult()), mul)
+    MATMUL = (11, "{} @ {}", bin_op(ast.MatMult()), matmul)
+    TRUEDIV = (11, "{} / {}", bin_op(ast.Div()), truediv)
+    FLOORDIV = (11, "{} // {}", bin_op(ast.FloorDiv()), floordiv)
+    MOD = (11, "{} % {}", bin_op(ast.Mod()), mod)
+    NEG = (12, "-{}", unary_op(ast.USub()), neg)
+    POS = (12, "+{}", unary_op(ast.UAdd()), pos)
+    INVERT = (12, "~{}", unary_op(ast.Invert()), invert)
+    POW = (13, "{} ** {}", bin_op(ast.Pow()), pow)
 
     # The folowing are not considered BinaryOps and require special handling.
-    GETITEM = (15, "{}[{}]", subscript)
-    GETATTR = (15, "{}.{}", attribute)
+    GETITEM = (15, "{}[{}]", subscript, getitem)
+    GETATTR = (15, "{}.{}", attribute, getattr)
+
+    # Special no-op operation only affecting the user-friendly string.
+    PARENS = (16, "({})", lambda x: x, lambda x: x)
+
+    # Special no-op "identity" operation representing the argument itself.
+    ARG = (100, "{}", name, lambda x: x)
 
     def __init__(
         self,
         precedence: int,
         format_str: str,
         ast_op: Callable[..., ast.expr],
+        operator: Union[UnaryFunction, BinaryFunction],
     ):
         self.precedence = precedence
         self.format_str = format_str
         self.ast_op = ast_op
+        self.operator = operator
 
-    def render(self, *args: str) -> str:
+    def render(self, *args: Any) -> str:
         """Generate a string representation of an operation given its args"""
         return self.format_str.format(*args)
 
@@ -148,20 +191,28 @@ class Lambda:
     tree: ast.expr
     closure: ClosureChain
     body_str: str
+    last_op: Operation
+
+    @classmethod
+    def new(cls, arg_name: str) -> "Lambda":
+        """Create an empty initial (identity) lambda"""
+        return cls(
+            arg_name, name(arg_name), ClosureChain.new(), arg_name, Operation.ARG
+        )
 
     def __repr__(self) -> str:
         return f"{self.body_str}"
 
     def render(self) -> str:
         """Render the user-friendly lambda definition"""
-        return f"{self.name} -> {self.body_str}"
+        return f"{self.name} -> {self}"
 
-    def compile(self, name: str) -> CodeType:
+    def compile(self) -> CodeType:
         """Create the code for a lambda with this object as its body"""
         lambda_ast = ast.Expression(
             ast.Lambda(
                 args=ast.arguments(
-                    posonlyargs=[ast.arg(arg=name)],
+                    posonlyargs=[ast.arg(arg=self.name)],
                     args=[],
                     kwonlyargs=[],
                     kw_defaults=[],
@@ -176,64 +227,22 @@ class Lambda:
         # than a code object.
         return cast(CodeType, code)
 
+    def merge_after(self, op: Operation, other: "Lambda") -> "Lambda":
+        """Combine this Lambda with another according to the given operation."""
 
-class LambdaBuilder:
-    """Assembles the lambda by recording operations performed on it"""
-
-    def __init__(
-        self,
-        start_from: Union[str, Lambda],
-        precedence: int = 100,
-    ):
-        if isinstance(start_from, str):
-            name = start_from
-            if not name.isidentifier():
-                raise ValueError("name must be a valid Python identifier")
-            self.__lambda = Lambda(
-                name,
-                ast.Name(id=name, ctx=ast.Load()),
-                ClosureChain.new(),
-                name,
-            )
-        else:
-            self.__lambda = start_from
-        self.__precedence = precedence
-
-    def __repr__(self) -> str:
-        return self.__lambda.render()
-
-    def render(
-        self, item: Any, op: Optional[Operation] = None, from_right: bool = False
-    ) -> str:
-        """Render an item, optionally with an operator in a user friendly way"""
-        if isinstance(item, LambdaBuilder):
-            item_precedence = item.__precedence  # pylint: disable=protected-access
-            item = item.__lambda  # pylint: disable=protected-access
-
-        if not op:
-            return repr(item)
-
-        do_paren = self.__precedence < op.precedence or (
-            from_right and self.__precedence == op.precedence
+        other_ast = self.update_appended_closure_idxs(other.tree)
+        return replace(
+            self,
+            tree=op.ast_op(self.tree, other_ast),
+            closure=self.closure.chain(other.closure),
+            body_str=op.render(self, other),
+            last_op=op,
         )
-        body_str = f"({self.__lambda})" if do_paren else repr(self.__lambda)
-
-        if isinstance(item, Lambda):
-            do_paren = item_precedence < op.precedence or (
-                not from_right and item_precedence == op.precedence
-            )
-            other_body_str = f"({item})" if do_paren else repr(item)
-        else:
-            other_body_str = self.render(item)
-
-        if from_right:
-            return op.render(other_body_str, body_str)
-        return op.render(body_str, other_body_str)
 
     def update_appended_closure_idxs(self, tree: ast.expr) -> ast.expr:
         """Update the indexes of the given tree to start after this closure"""
         new_tree = deepcopy(tree)
-        base = len(self.__lambda.closure)
+        base = len(self.closure)
         for node in ast.walk(new_tree):
             if (
                 isinstance(node, ast.Subscript)
@@ -244,64 +253,107 @@ class LambdaBuilder:
                 node.slice.value += base
         return new_tree
 
+    def contextually_paren(self, op: Operation, from_right: bool = False) -> "Lambda":
+        """Return this, but with parens around it if contextually warranted"""
+        do_paren = self.last_op.precedence < op.precedence or (
+            from_right and self.last_op.precedence == op.precedence
+        )
+        if do_paren and self.last_op is not Operation.PARENS:
+            return replace(
+                self,
+                body_str=Operation.PARENS.render(self),
+                last_op=Operation.PARENS,
+            )
+        return self
+
+
+class LambdaBuilder:
+    """Assembles the lambda by recording operations performed on it"""
+
+    def __init__(
+        self,
+        start_from: Union[str, Lambda],
+    ):
+        if isinstance(start_from, str):
+            self.__lambda = Lambda.new(start_from)
+        else:
+            self.__lambda = start_from
+
+    def __repr__(self) -> str:
+        return self.__lambda.render()
+
     def __op(
         self, op: Operation, other: Any, from_right: bool = False
     ) -> "LambdaBuilder":
-        do_paren = self.__precedence < op.precedence or (
-            from_right and self.__precedence == op.precedence
-        )
-        body_str = f"({self.__lambda})" if do_paren else repr(self.__lambda)
+        lambda_in_context = self.__lambda.contextually_paren(op, from_right)
 
         if isinstance(other, LambdaBuilder):
-            other_lambda = other.__lambda  # pylint: disable=protected-access
-            other_ast = self.update_appended_closure_idxs(other_lambda.tree)
-            new_closure = self.__lambda.closure.chain(other_lambda.closure)
-        else:
-            other_ast = ast.Subscript(
-                value=ast.Name(id="closure", ctx=ast.Load()),
-                slice=ast.Constant(value=len(self.__lambda.closure)),
-                ctx=ast.Load(),
+            # This situation means both sides are LambdaBuilder instances, and
+            # since the left-side operations take precedence, from_right should
+            # always be false here and doesn't need to be checked.
+
+            # This cast is safe given the contract that it should only be called
+            # for binary operations.
+            operation = cast(BinaryFunction, op.operator)
+            new = operation(
+                lambda_in_context,
+                other,
             )
-            new_closure = self.__lambda.closure.chain([other])
+            # Operations on a LambdaBuilder (except call) always return another
+            # LambdaBuilder instance, so this is safe.
+            return cast(LambdaBuilder, new)
+
+        if isinstance(other, Lambda):
+            # Unless someone is mucking about with Lambda instances directly
+            # rather than just letting this class handle them (they shouldn't)
+            # this situation arises directly from the immediately preceding
+            # code, but now we are in the right-side LambdaBuilder instance.
+            return LambdaBuilder(
+                other.merge_after(op, lambda_in_context),
+            )
+
+        other_ast = ast.Subscript(
+            value=ast.Name(id="closure", ctx=ast.Load()),
+            slice=ast.Constant(value=len(self.__lambda.closure)),
+            ctx=ast.Load(),
+        )
+        new_closure = self.__lambda.closure.chain([other])
 
         if from_right:
             new_tree = op.ast_op(other_ast, self.__lambda.tree)
+            body_str = op.render(repr(other), lambda_in_context)
         else:
             new_tree = op.ast_op(self.__lambda.tree, other_ast)
-        body_str = self.render(other, op, from_right=from_right)
+            body_str = op.render(lambda_in_context, repr(other))
 
         return LambdaBuilder(
-            Lambda(
-                self.__lambda.name,
-                new_tree,
-                new_closure,
-                body_str,
+            replace(
+                lambda_in_context,
+                tree=new_tree,
+                closure=new_closure,
+                body_str=body_str,
+                last_op=op,
             ),
-            precedence=op.precedence,
         )
 
     def __uop(self, op: Operation) -> "LambdaBuilder":
-        do_paren = self.__precedence <= op.precedence
-        body_str = f"({self.__lambda})" if do_paren else repr(self.__lambda)
-
+        new = self.__lambda.contextually_paren(op, from_right=True)
         return LambdaBuilder(
-            Lambda(
-                self.__lambda.name,
-                op.ast_op(self.__lambda.tree),
-                self.__lambda.closure,
-                op.render(body_str),
+            replace(
+                new,
+                tree=op.ast_op(self.__lambda.tree),
+                body_str=op.render(new),
+                last_op=op,
             ),
-            precedence=op.precedence,
         )
 
     def __special_op(
         self, op: Union[Literal[Operation.GETATTR, Operation.GETITEM]], other: Any
     ) -> "LambdaBuilder":
-        do_paren = self.__precedence <= op.precedence
-        body_str = f"({self.__lambda})" if do_paren else repr(self.__lambda)
+        new = self.__lambda.contextually_paren(op)
 
         if op is Operation.GETATTR:
-            body_str = op.render(body_str, str(other))
+            body_str = op.render(new, other)
             new_tree = op.ast_op(self.__lambda.tree, str(other))
             new_closure = self.__lambda.closure
         elif op is Operation.GETITEM:
@@ -310,18 +362,18 @@ class LambdaBuilder:
                 slice=ast.Constant(value=len(self.__lambda.closure)),
                 ctx=ast.Load(),
             )
-            body_str = op.render(body_str, repr(other))
+            body_str = op.render(new, repr(other))
             new_tree = op.ast_op(self.__lambda.tree, other_ast)
             new_closure = self.__lambda.closure.chain([other])
 
         return LambdaBuilder(
-            Lambda(
-                self.__lambda.name,
-                new_tree,
-                new_closure,
-                body_str,
+            replace(
+                new,
+                tree=new_tree,
+                closure=new_closure,
+                body_str=body_str,
+                last_op=op,
             ),
-            precedence=op.precedence,
         )
 
     def __bool__(self) -> NoReturn:
@@ -445,7 +497,7 @@ class LambdaBuilder:
         return func(arg)
 
     def __compile(self) -> Callable[[Any], Any]:
-        code = self.__lambda.compile(self.__lambda.name)
+        code = self.__lambda.compile()
         closure = list(self.__lambda.closure)
         # Evaluating the AST we generate is key to the functioning of this
         # object, so we ignore the eval warning here.

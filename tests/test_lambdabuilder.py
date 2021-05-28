@@ -116,6 +116,12 @@ def test_arithmetic_precedence_parens():
     assert fn(3) == 8
 
 
+def test_unary_precedence_parens():
+    fn = -(-_)
+    assert repr(fn) == "_ -> -(-_)"
+    assert fn(2) == 2
+
+
 def test_chained_binary_op_and_compare():
     assert list(filter(_ % 2 == 0, range(10))) == list(range(0, 10, 2))
 
