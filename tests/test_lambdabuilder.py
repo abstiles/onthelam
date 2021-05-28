@@ -152,3 +152,28 @@ def test_repeated_with_merged_closures():
     fn = (_ + 2) * (_ + 3)
     assert repr(fn) == "_ -> (_ + 2) * (_ + 3)"
     assert fn(3) == 30
+
+
+def test_multi_args():
+    _1 = LambdaBuilder("_1")
+    _2 = LambdaBuilder("_2")
+    fn = _1 + _2
+    assert repr(fn) == "_1, _2 -> _1 + _2"
+    assert fn(1, 2) == 3
+
+
+def test_multi_args_with_getattr():
+    _1 = LambdaBuilder("_1")
+    _2 = LambdaBuilder("_2")
+    fn = _1[_2]
+    assert repr(fn) == "_1, _2 -> _1[_2]"
+    assert fn([1, 2, 3], 2) == 3
+
+
+def test_multi_keyword_args():
+    _1 = LambdaBuilder("_1")
+    _2 = LambdaBuilder("_2")
+    fn = _1[_2]
+    assert repr(fn) == "_1, _2 -> _1[_2]"
+    assert fn([1, 2, 3], 2) == 3
+    assert fn(_2=2, _1=[1, 2, 3]) == 3

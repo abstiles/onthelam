@@ -220,7 +220,7 @@ class ClosureChain:
 class Lambda:
     """Maintains the data model of a lambda function"""
 
-    name: str
+    args: list[str]
     tree: ast.expr
     closure: ClosureChain
     body_str: str
@@ -230,7 +230,7 @@ class Lambda:
     def new(cls, arg_name: str) -> "Lambda":
         """Create an empty initial (identity) lambda"""
         return cls(
-            arg_name, name(arg_name), ClosureChain.new(), arg_name, Operation.ARG
+            [arg_name], name(arg_name), ClosureChain.new(), arg_name, Operation.ARG
         )
 
     def __repr__(self) -> str:
@@ -238,15 +238,15 @@ class Lambda:
 
     def render(self) -> str:
         """Render the user-friendly lambda definition"""
-        return f"{self.name} -> {self}"
+        return f"{', '.join(self.args)} -> {self}"
 
     def compile(self) -> CodeType:
         """Create the code for a lambda with this object as its body"""
         lambda_ast = ast.Expression(
             ast.Lambda(
                 args=ast.arguments(
-                    posonlyargs=[ast.arg(arg=self.name)],
-                    args=[],
+                    posonlyargs=[],
+                    args=[*map(ast.arg, self.args)],
                     kwonlyargs=[],
                     kw_defaults=[],
                     defaults=[],
@@ -266,8 +266,10 @@ class Lambda:
         left = self.contextually_paren(op)
         right = other.contextually_paren(op, from_right=True)
         right = replace(right, tree=self.update_appended_closure_idxs(right.tree))
+        added_args = [arg for arg in right.args if arg not in set(left.args)]
         return replace(
             left,
+            args=left.args if not added_args else left.args + added_args,
             tree=op.render_ast(left.tree, right.tree),
             closure=self.closure.chain(right.closure),
             body_str=op.render_str(left, right),
@@ -371,9 +373,16 @@ class LambdaBuilder:
             # since the left-side operations take precedence, from_right should
             # always be false here and doesn't need to be checked.
 
+            # This swaps the original order of the operands (self = lhs, other
+            # = rhs) to account for the asymmetry in the getitem operation:
+            # we can only detect when this object is indexed, not when it's
+            # used as an index. This is fine because the following block
+            # detects a Lambda instance and always treats it as the rhs of any
+            # operation.
+            result = op(other, self.__lambda)
             # Operations on a LambdaBuilder (except call) always return another
             # LambdaBuilder instance, so this is safe.
-            return cast(LambdaBuilder, op(self.__lambda, other))
+            return cast(LambdaBuilder, result)
 
         if isinstance(other, Lambda):
             # Unless someone is mucking about with Lambda instances directly
@@ -502,11 +511,11 @@ class LambdaBuilder:
     def __getattr__(self, item: str) -> "LambdaBuilder":
         return LambdaBuilder(self.__lambda.apply_getattr(item))
 
-    def __call__(self, arg: Any) -> Any:
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
         func = self.__compile()
-        return func(arg)
+        return func(*args, **kwargs)
 
-    def __compile(self) -> Callable[[Any], Any]:
+    def __compile(self) -> Callable[..., Any]:
         code = self.__lambda.compile()
         closure = list(self.__lambda.closure)
         # Evaluating the AST we generate is key to the functioning of this
@@ -515,7 +524,7 @@ class LambdaBuilder:
         # This is guaranteed to be callable because the AST we are compiling
         # contains a single expression containing a single lambda accepting
         # one parameter.
-        return cast(Callable[[Any], Any], func)
+        return cast(Callable[..., Any], func)
 
 
 _ = LambdaBuilder("_")
