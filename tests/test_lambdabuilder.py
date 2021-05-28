@@ -1,25 +1,12 @@
-import ast
 from unittest.mock import MagicMock
 
 import pytest
 
-from onthelam import Operation, LambdaBuilder, _
+from onthelam.lambdabuilder import LambdaBuilder
 
 
-def test_operation_ordering():
-    assert Operation.ADD <= Operation.SUB < Operation.MUL
-    assert Operation.PARENS > Operation.GT >= Operation.GE
-
-
-def test_operation_ordering_same_class_only():
-    with pytest.raises(TypeError):
-        Operation.ADD < 20
-    with pytest.raises(TypeError):
-        Operation.ADD <= 10
-    with pytest.raises(TypeError):
-        Operation.ADD >= 10
-    with pytest.raises(TypeError):
-        Operation.ADD > 1
+_ = LambdaBuilder("_")
+OBJ = MagicMock()
 
 
 def test_simple_identity():
@@ -42,9 +29,6 @@ def test_invalid_name():
 def test_bools_bad():
     with pytest.raises(NotImplementedError):
         bool(_)
-
-
-OBJ = MagicMock()
 
 
 @pytest.mark.parametrize(
