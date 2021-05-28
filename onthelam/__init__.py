@@ -7,7 +7,17 @@ operations on the given argument.
 import ast
 from enum import Enum
 from dataclasses import dataclass, field
-from typing import cast, Any, Callable, Iterator, NamedTuple, Optional, NoReturn
+from typing import (
+    cast,
+    Any,
+    Callable,
+    Iterator,
+    Literal,
+    NamedTuple,
+    Optional,
+    NoReturn,
+    Union,
+)
 from types import CodeType
 
 
@@ -69,7 +79,7 @@ class Operation(Enum):
 
     # The folowing are not considered BinaryOps and require special handling.
     GETITEM = (15, "{}[{}]", subscript, NothingOperator)
-    GETATTR = (15, "{}.{}", subscript, NothingOperator)
+    GETATTR = (15, "{}.{}", attribute, NothingOperator)
 
     def __init__(
         self,
@@ -83,7 +93,7 @@ class Operation(Enum):
         self.operation = operation
         self.ast_op = ast_op
 
-    def format(self, *args: str) -> str:
+    def render(self, *args: str) -> str:
         """Generate a string representation of an operation given its args"""
         return self.format_str.format(*args)
 
@@ -191,12 +201,12 @@ class LambdaBuilder:
         if from_right:
             new_body = LambdaBody(
                 op.operation(op.ast_op, other_ast, self.__body.tree),
-                op.format(repr(other), body_str),
+                op.render(repr(other), body_str),
             )
         else:
             new_body = LambdaBody(
                 op.operation(op.ast_op, self.__body.tree, other_ast),
-                op.format(body_str, repr(other)),
+                op.render(body_str, repr(other)),
             )
 
         return LambdaBuilder(
@@ -214,9 +224,40 @@ class LambdaBuilder:
             self.__name,
             LambdaBody(
                 unary_op(op.ast_op, self.__body.tree),
-                op.format(body_str),
+                op.render(body_str),
             ),
             closure=self.__closure,
+            precedence=op.precedence,
+        )
+
+    def __special_op(
+        self, op: Union[Literal[Operation.GETATTR, Operation.GETITEM]], other: Any
+    ) -> "LambdaBuilder":
+        do_paren = self.__precedence <= op.precedence
+        body_str = f"({self.__body})" if do_paren else str(self.__body)
+
+        if op is Operation.GETATTR:
+            new_body = LambdaBody(
+                op.operation(self.__body.tree, str(other)),
+                op.render(body_str, str(other)),
+            )
+            new_closure = self.__closure
+        elif op is Operation.GETITEM:
+            other_ast = ast.Subscript(
+                value=ast.Name(id="closure", ctx=ast.Load()),
+                slice=ast.Constant(value=len(self.__closure)),
+                ctx=ast.Load(),
+            )
+            new_body = LambdaBody(
+                op.operation(self.__body.tree, other_ast),
+                op.render(body_str, repr(other)),
+            )
+            new_closure = self.__closure.chain([other])
+
+        return LambdaBuilder(
+            self.__name,
+            new_body,
+            closure=new_closure,
             precedence=op.precedence,
         )
 
@@ -329,6 +370,12 @@ class LambdaBuilder:
 
     def __invert__(self) -> "LambdaBuilder":
         return self.__uop(Operation.INVERT)
+
+    def __getitem__(self, item: Any) -> "LambdaBuilder":
+        return self.__special_op(Operation.GETITEM, item)
+
+    def __getattr__(self, item: str) -> "LambdaBuilder":
+        return self.__special_op(Operation.GETATTR, item)
 
     def __call__(self, arg: Any) -> Any:
         func = self.__compile()

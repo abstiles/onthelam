@@ -76,6 +76,8 @@ OBJ = MagicMock()
         (lambda: +_, "+_", OBJ, +OBJ),
         (lambda: -_, "-_", 3, -3),
         (lambda: ~_, "~_", 5, ~5),
+        (lambda: _[0], "_[0]", [1, 2], [1, 2][0]),
+        (lambda: _.attr, "_.attr", OBJ, OBJ.attr),
     ],
 )
 def test_basic_ops(expr, body_str, arg, result):
