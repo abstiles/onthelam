@@ -91,6 +91,11 @@ def name(value: str) -> ast.Name:
     return ast.Name(id=value, ctx=ast.Load())
 
 
+def constant(value: Any) -> ast.Constant:
+    """Generate an ast constant expression"""
+    return ast.Constant(value=value)
+
+
 UnaryFunction = Callable[[Any], Any]
 BinaryFunction = Callable[[Any, Any], Any]
 
@@ -137,17 +142,45 @@ class Operation(Enum):
         self,
         precedence: int,
         format_str: str,
-        ast_op: Callable[..., ast.expr],
-        operator: Union[UnaryFunction, BinaryFunction],
+        ast_renderer: Callable[..., ast.expr],
+        operation_function: Union[UnaryFunction, BinaryFunction],
     ):
-        self.precedence = precedence
-        self.format_str = format_str
-        self.ast_op = ast_op
-        self.operator = operator
+        self._precedence = precedence
+        self._format_str = format_str
+        self._ast_renderer = ast_renderer
+        self._operation_function = operation_function
 
-    def render(self, *args: Any) -> str:
+    @property
+    def render_ast(self) -> Callable[..., ast.expr]:
+        """Generate the AST expression object for this operation on its args"""
+        return self._ast_renderer
+
+    def render_str(self, *args: Any) -> str:
         """Generate a string representation of an operation given its args"""
-        return self.format_str.format(*args)
+        return self._format_str.format(*args)
+
+    def __call__(self, *args: Any) -> Any:
+        return self._operation_function(*args)
+
+    def __ge__(self, other: "Operation") -> bool:
+        if self.__class__ is other.__class__:
+            return self._precedence >= other._precedence
+        return NotImplemented
+
+    def __gt__(self, other: "Operation") -> bool:
+        if self.__class__ is other.__class__:
+            return self._precedence > other._precedence
+        return NotImplemented
+
+    def __le__(self, other: "Operation") -> bool:
+        if self.__class__ is other.__class__:
+            return self._precedence <= other._precedence
+        return NotImplemented
+
+    def __lt__(self, other: "Operation") -> bool:
+        if self.__class__ is other.__class__:
+            return self._precedence < other._precedence
+        return NotImplemented
 
 
 @dataclass(frozen=True)
@@ -230,12 +263,14 @@ class Lambda:
     def merge_after(self, op: Operation, other: "Lambda") -> "Lambda":
         """Combine this Lambda with another according to the given operation."""
 
-        other_ast = self.update_appended_closure_idxs(other.tree)
+        left = self.contextually_paren(op)
+        right = other.contextually_paren(op, from_right=True)
+        right = replace(right, tree=self.update_appended_closure_idxs(right.tree))
         return replace(
-            self,
-            tree=op.ast_op(self.tree, other_ast),
-            closure=self.closure.chain(other.closure),
-            body_str=op.render(self, other),
+            left,
+            tree=op.render_ast(left.tree, right.tree),
+            closure=self.closure.chain(right.closure),
+            body_str=op.render_str(left, right),
             last_op=op,
         )
 
@@ -255,16 +290,62 @@ class Lambda:
 
     def contextually_paren(self, op: Operation, from_right: bool = False) -> "Lambda":
         """Return this, but with parens around it if contextually warranted"""
-        do_paren = self.last_op.precedence < op.precedence or (
-            from_right and self.last_op.precedence == op.precedence
-        )
+        do_paren = self.last_op < op or (from_right and self.last_op <= op)
         if do_paren and self.last_op is not Operation.PARENS:
             return replace(
                 self,
-                body_str=Operation.PARENS.render(self),
+                body_str=Operation.PARENS.render_str(self),
                 last_op=Operation.PARENS,
             )
         return self
+
+    def apply_binary_op(
+        self, op: Operation, other: Any, from_right: bool = False
+    ) -> "Lambda":
+        """Apply the given binary operation on this lambda"""
+        new = self.contextually_paren(op, from_right)
+
+        other_ast = subscript(name("closure"), constant(len(self.closure)))
+        new_closure = self.closure.chain([other])
+
+        if from_right:
+            new_tree = op.render_ast(other_ast, new.tree)
+            body_str = op.render_str(repr(other), new)
+        else:
+            new_tree = op.render_ast(new.tree, other_ast)
+            body_str = op.render_str(new, repr(other))
+
+        return replace(
+            new,
+            tree=new_tree,
+            closure=new_closure,
+            body_str=body_str,
+            last_op=op,
+        )
+
+    def apply_unary_op(self, op: Operation) -> "Lambda":
+        """Apply the given binary operation on this lambda"""
+        new = self.contextually_paren(op, from_right=True)
+
+        return replace(
+            new,
+            tree=op.render_ast(self.tree),
+            body_str=op.render_str(new),
+            last_op=op,
+        )
+
+    def apply_getattr(self, attr: str) -> "Lambda":
+        """Apply the getattr operation on this lambda"""
+        op = Operation.GETATTR
+        new = self.contextually_paren(op)
+
+        return replace(
+            new,
+            tree=op.render_ast(self.tree, attr),
+            closure=self.closure,
+            body_str=op.render_str(new, attr),
+            last_op=op,
+        )
 
 
 class LambdaBuilder:
@@ -282,26 +363,17 @@ class LambdaBuilder:
     def __repr__(self) -> str:
         return self.__lambda.render()
 
-    def __op(
+    def __binary_op(
         self, op: Operation, other: Any, from_right: bool = False
     ) -> "LambdaBuilder":
-        lambda_in_context = self.__lambda.contextually_paren(op, from_right)
-
         if isinstance(other, LambdaBuilder):
             # This situation means both sides are LambdaBuilder instances, and
             # since the left-side operations take precedence, from_right should
             # always be false here and doesn't need to be checked.
 
-            # This cast is safe given the contract that it should only be called
-            # for binary operations.
-            operation = cast(BinaryFunction, op.operator)
-            new = operation(
-                lambda_in_context,
-                other,
-            )
             # Operations on a LambdaBuilder (except call) always return another
             # LambdaBuilder instance, so this is safe.
-            return cast(LambdaBuilder, new)
+            return cast(LambdaBuilder, op(self.__lambda, other))
 
         if isinstance(other, Lambda):
             # Unless someone is mucking about with Lambda instances directly
@@ -309,72 +381,10 @@ class LambdaBuilder:
             # this situation arises directly from the immediately preceding
             # code, but now we are in the right-side LambdaBuilder instance.
             return LambdaBuilder(
-                other.merge_after(op, lambda_in_context),
+                other.merge_after(op, self.__lambda),
             )
 
-        other_ast = ast.Subscript(
-            value=ast.Name(id="closure", ctx=ast.Load()),
-            slice=ast.Constant(value=len(self.__lambda.closure)),
-            ctx=ast.Load(),
-        )
-        new_closure = self.__lambda.closure.chain([other])
-
-        if from_right:
-            new_tree = op.ast_op(other_ast, self.__lambda.tree)
-            body_str = op.render(repr(other), lambda_in_context)
-        else:
-            new_tree = op.ast_op(self.__lambda.tree, other_ast)
-            body_str = op.render(lambda_in_context, repr(other))
-
-        return LambdaBuilder(
-            replace(
-                lambda_in_context,
-                tree=new_tree,
-                closure=new_closure,
-                body_str=body_str,
-                last_op=op,
-            ),
-        )
-
-    def __uop(self, op: Operation) -> "LambdaBuilder":
-        new = self.__lambda.contextually_paren(op, from_right=True)
-        return LambdaBuilder(
-            replace(
-                new,
-                tree=op.ast_op(self.__lambda.tree),
-                body_str=op.render(new),
-                last_op=op,
-            ),
-        )
-
-    def __special_op(
-        self, op: Union[Literal[Operation.GETATTR, Operation.GETITEM]], other: Any
-    ) -> "LambdaBuilder":
-        new = self.__lambda.contextually_paren(op)
-
-        if op is Operation.GETATTR:
-            body_str = op.render(new, other)
-            new_tree = op.ast_op(self.__lambda.tree, str(other))
-            new_closure = self.__lambda.closure
-        elif op is Operation.GETITEM:
-            other_ast = ast.Subscript(
-                value=ast.Name(id="closure", ctx=ast.Load()),
-                slice=ast.Constant(value=len(self.__lambda.closure)),
-                ctx=ast.Load(),
-            )
-            body_str = op.render(new, repr(other))
-            new_tree = op.ast_op(self.__lambda.tree, other_ast)
-            new_closure = self.__lambda.closure.chain([other])
-
-        return LambdaBuilder(
-            replace(
-                new,
-                tree=new_tree,
-                closure=new_closure,
-                body_str=body_str,
-                last_op=op,
-            ),
-        )
+        return LambdaBuilder(self.__lambda.apply_binary_op(op, other, from_right))
 
     def __bool__(self) -> NoReturn:
         raise NotImplementedError(
@@ -382,115 +392,115 @@ class LambdaBuilder:
         )
 
     def __lt__(self, other: Any) -> "LambdaBuilder":
-        return self.__op(Operation.LT, other)
+        return self.__binary_op(Operation.LT, other)
 
     def __le__(self, other: Any) -> "LambdaBuilder":
-        return self.__op(Operation.LE, other)
+        return self.__binary_op(Operation.LE, other)
 
     def __eq__(self, other: Any) -> "LambdaBuilder":  # type: ignore
-        return self.__op(Operation.EQ, other)
+        return self.__binary_op(Operation.EQ, other)
 
     def __ne__(self, other: Any) -> "LambdaBuilder":  # type: ignore
-        return self.__op(Operation.NE, other)
+        return self.__binary_op(Operation.NE, other)
 
     def __ge__(self, other: Any) -> "LambdaBuilder":
-        return self.__op(Operation.GE, other)
+        return self.__binary_op(Operation.GE, other)
 
     def __gt__(self, other: Any) -> "LambdaBuilder":
-        return self.__op(Operation.GT, other)
+        return self.__binary_op(Operation.GT, other)
 
     def __or__(self, other: Any) -> "LambdaBuilder":
-        return self.__op(Operation.OR, other)
+        return self.__binary_op(Operation.OR, other)
 
     def __ror__(self, other: Any) -> "LambdaBuilder":
-        return self.__op(Operation.OR, other, from_right=True)
+        return self.__binary_op(Operation.OR, other, from_right=True)
 
     def __xor__(self, other: Any) -> "LambdaBuilder":
-        return self.__op(Operation.XOR, other)
+        return self.__binary_op(Operation.XOR, other)
 
     def __rxor__(self, other: Any) -> "LambdaBuilder":
-        return self.__op(Operation.XOR, other, from_right=True)
+        return self.__binary_op(Operation.XOR, other, from_right=True)
 
     def __and__(self, other: Any) -> "LambdaBuilder":
-        return self.__op(Operation.AND, other)
+        return self.__binary_op(Operation.AND, other)
 
     def __rand__(self, other: Any) -> "LambdaBuilder":
-        return self.__op(Operation.AND, other, from_right=True)
+        return self.__binary_op(Operation.AND, other, from_right=True)
 
     def __lshift__(self, other: Any) -> "LambdaBuilder":
-        return self.__op(Operation.LSHIFT, other)
+        return self.__binary_op(Operation.LSHIFT, other)
 
     def __rlshift__(self, other: Any) -> "LambdaBuilder":
-        return self.__op(Operation.LSHIFT, other, from_right=True)
+        return self.__binary_op(Operation.LSHIFT, other, from_right=True)
 
     def __rshift__(self, other: Any) -> "LambdaBuilder":
-        return self.__op(Operation.RSHIFT, other)
+        return self.__binary_op(Operation.RSHIFT, other)
 
     def __rrshift__(self, other: Any) -> "LambdaBuilder":
-        return self.__op(Operation.RSHIFT, other, from_right=True)
+        return self.__binary_op(Operation.RSHIFT, other, from_right=True)
 
     def __add__(self, other: Any) -> "LambdaBuilder":
-        return self.__op(Operation.ADD, other)
+        return self.__binary_op(Operation.ADD, other)
 
     def __radd__(self, other: Any) -> "LambdaBuilder":
-        return self.__op(Operation.ADD, other, from_right=True)
+        return self.__binary_op(Operation.ADD, other, from_right=True)
 
     def __sub__(self, other: Any) -> "LambdaBuilder":
-        return self.__op(Operation.SUB, other)
+        return self.__binary_op(Operation.SUB, other)
 
     def __rsub__(self, other: Any) -> "LambdaBuilder":
-        return self.__op(Operation.SUB, other, from_right=True)
+        return self.__binary_op(Operation.SUB, other, from_right=True)
 
     def __mul__(self, other: Any) -> "LambdaBuilder":
-        return self.__op(Operation.MUL, other)
+        return self.__binary_op(Operation.MUL, other)
 
     def __rmul__(self, other: Any) -> "LambdaBuilder":
-        return self.__op(Operation.MUL, other, from_right=True)
+        return self.__binary_op(Operation.MUL, other, from_right=True)
 
     def __truediv__(self, other: Any) -> "LambdaBuilder":
-        return self.__op(Operation.TRUEDIV, other)
+        return self.__binary_op(Operation.TRUEDIV, other)
 
     def __rtruediv__(self, other: Any) -> "LambdaBuilder":
-        return self.__op(Operation.TRUEDIV, other, from_right=True)
+        return self.__binary_op(Operation.TRUEDIV, other, from_right=True)
 
     def __floordiv__(self, other: Any) -> "LambdaBuilder":
-        return self.__op(Operation.FLOORDIV, other)
+        return self.__binary_op(Operation.FLOORDIV, other)
 
     def __rfloordiv__(self, other: Any) -> "LambdaBuilder":
-        return self.__op(Operation.FLOORDIV, other, from_right=True)
+        return self.__binary_op(Operation.FLOORDIV, other, from_right=True)
 
     def __mod__(self, other: Any) -> "LambdaBuilder":
-        return self.__op(Operation.MOD, other)
+        return self.__binary_op(Operation.MOD, other)
 
     def __rmod__(self, other: Any) -> "LambdaBuilder":
-        return self.__op(Operation.MOD, other, from_right=True)
+        return self.__binary_op(Operation.MOD, other, from_right=True)
 
     def __matmul__(self, other: Any) -> "LambdaBuilder":
-        return self.__op(Operation.MATMUL, other)
+        return self.__binary_op(Operation.MATMUL, other)
 
     def __rmatmul__(self, other: Any) -> "LambdaBuilder":
-        return self.__op(Operation.MATMUL, other, from_right=True)
+        return self.__binary_op(Operation.MATMUL, other, from_right=True)
 
     def __pow__(self, other: Any) -> "LambdaBuilder":
-        return self.__op(Operation.POW, other)
+        return self.__binary_op(Operation.POW, other)
 
     def __rpow__(self, other: Any) -> "LambdaBuilder":
-        return self.__op(Operation.POW, other, from_right=True)
+        return self.__binary_op(Operation.POW, other, from_right=True)
 
     def __pos__(self) -> "LambdaBuilder":
-        return self.__uop(Operation.POS)
+        return LambdaBuilder(self.__lambda.apply_unary_op(Operation.POS))
 
     def __neg__(self) -> "LambdaBuilder":
-        return self.__uop(Operation.NEG)
+        return LambdaBuilder(self.__lambda.apply_unary_op(Operation.NEG))
 
     def __invert__(self) -> "LambdaBuilder":
-        return self.__uop(Operation.INVERT)
+        return LambdaBuilder(self.__lambda.apply_unary_op(Operation.INVERT))
 
     def __getitem__(self, item: Any) -> "LambdaBuilder":
-        return self.__special_op(Operation.GETITEM, item)
+        return self.__binary_op(Operation.GETITEM, item)
 
     def __getattr__(self, item: str) -> "LambdaBuilder":
-        return self.__special_op(Operation.GETATTR, item)
+        return LambdaBuilder(self.__lambda.apply_getattr(item))
 
     def __call__(self, arg: Any) -> Any:
         func = self.__compile()
