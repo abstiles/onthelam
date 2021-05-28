@@ -99,37 +99,6 @@ class Operation(Enum):
 
 
 @dataclass(frozen=True)
-class LambdaBody:
-    """The AST for a lambda and its string representation"""
-
-    tree: ast.expr
-    _str: str
-
-    def __repr__(self) -> str:
-        return self._str
-
-    def compile(self, name: str) -> CodeType:
-        """Create the code for a lambda with this object as its body"""
-        lambda_ast = ast.Expression(
-            ast.Lambda(
-                args=ast.arguments(
-                    posonlyargs=[ast.arg(arg=name)],
-                    args=[],
-                    kwonlyargs=[],
-                    kw_defaults=[],
-                    defaults=[],
-                ),
-                body=self.tree,
-            )
-        )
-        lambda_ast = ast.fix_missing_locations(lambda_ast)
-        code = compile(lambda_ast, "<LambdaBuilder>", mode="eval")
-        # Unclear why Mypy thinks the "compile" function returns anything other
-        # than a code object.
-        return cast(CodeType, code)
-
-
-@dataclass(frozen=True)
 class ClosureChain:
     """Maintains a chain of references to objects closed over in the lambda"""
 
@@ -162,27 +131,63 @@ class ClosureChain:
         return cls([])
 
 
+@dataclass(frozen=True)
+class Lambda:
+    """Maintains the data model of a lambda function"""
+
+    name: str
+    tree: ast.expr
+    closure: ClosureChain
+    body_str: str
+
+    def __repr__(self) -> str:
+        return f"{self.name} -> {self.body_str}"
+
+    def compile(self, name: str) -> CodeType:
+        """Create the code for a lambda with this object as its body"""
+        lambda_ast = ast.Expression(
+            ast.Lambda(
+                args=ast.arguments(
+                    posonlyargs=[ast.arg(arg=name)],
+                    args=[],
+                    kwonlyargs=[],
+                    kw_defaults=[],
+                    defaults=[],
+                ),
+                body=self.tree,
+            )
+        )
+        lambda_ast = ast.fix_missing_locations(lambda_ast)
+        code = compile(lambda_ast, "<LambdaBuilder>", mode="eval")
+        # Unclear why Mypy thinks the "compile" function returns anything other
+        # than a code object.
+        return cast(CodeType, code)
+
+
 class LambdaBuilder:
     """Assembles the lambda by recording operations performed on it"""
 
     def __init__(
         self,
-        name: str,
-        body: Optional[LambdaBody] = None,
-        closure: ClosureChain = ClosureChain.new(),
+        start_from: Union[str, Lambda],
         precedence: int = 100,
     ):
-        if not name.isidentifier():
-            raise ValueError("name must be a valid Python identifier")
-        self.__name = name
-        if not body:
-            body = LambdaBody(ast.Name(id=name, ctx=ast.Load()), name)
-        self.__body = body
-        self.__closure = closure
+        if isinstance(start_from, str):
+            name = start_from
+            if not name.isidentifier():
+                raise ValueError("name must be a valid Python identifier")
+            self.__lambda = Lambda(
+                name,
+                ast.Name(id=name, ctx=ast.Load()),
+                ClosureChain.new(),
+                name,
+            )
+        else:
+            self.__lambda = start_from
         self.__precedence = precedence
 
     def __repr__(self) -> str:
-        return f"{self.__name} -> {self.__body}"
+        return repr(self.__lambda)
 
     def __op(
         self, op: Operation, other: Any, from_right: bool = False
@@ -190,43 +195,42 @@ class LambdaBuilder:
         do_paren = self.__precedence < op.precedence or (
             from_right and self.__precedence == op.precedence
         )
-        body_str = f"({self.__body})" if do_paren else str(self.__body)
+        body_str = f"({self.__lambda.body_str})" if do_paren else self.__lambda.body_str
 
         other_ast = ast.Subscript(
             value=ast.Name(id="closure", ctx=ast.Load()),
-            slice=ast.Constant(value=len(self.__closure)),
+            slice=ast.Constant(value=len(self.__lambda.closure)),
             ctx=ast.Load(),
         )
 
         if from_right:
-            new_body = LambdaBody(
-                op.operation(op.ast_op, other_ast, self.__body.tree),
-                op.render(repr(other), body_str),
-            )
+            new_tree = op.operation(op.ast_op, other_ast, self.__lambda.tree)
+            body_str = op.render(repr(other), body_str)
         else:
-            new_body = LambdaBody(
-                op.operation(op.ast_op, self.__body.tree, other_ast),
-                op.render(body_str, repr(other)),
-            )
+            new_tree = op.operation(op.ast_op, self.__lambda.tree, other_ast)
+            body_str = op.render(body_str, repr(other))
 
         return LambdaBuilder(
-            self.__name,
-            new_body,
-            closure=self.__closure.chain([other]),
+            Lambda(
+                self.__lambda.name,
+                new_tree,
+                self.__lambda.closure.chain([other]),
+                body_str,
+            ),
             precedence=op.precedence,
         )
 
     def __uop(self, op: Operation) -> "LambdaBuilder":
         do_paren = self.__precedence <= op.precedence
-        body_str = f"({self.__body})" if do_paren else str(self.__body)
+        body_str = f"({self.__lambda.body_str})" if do_paren else self.__lambda.body_str
 
         return LambdaBuilder(
-            self.__name,
-            LambdaBody(
-                unary_op(op.ast_op, self.__body.tree),
+            Lambda(
+                self.__lambda.name,
+                unary_op(op.ast_op, self.__lambda.tree),
+                self.__lambda.closure,
                 op.render(body_str),
             ),
-            closure=self.__closure,
             precedence=op.precedence,
         )
 
@@ -234,30 +238,29 @@ class LambdaBuilder:
         self, op: Union[Literal[Operation.GETATTR, Operation.GETITEM]], other: Any
     ) -> "LambdaBuilder":
         do_paren = self.__precedence <= op.precedence
-        body_str = f"({self.__body})" if do_paren else str(self.__body)
+        body_str = f"({self.__lambda.body_str})" if do_paren else self.__lambda.body_str
 
         if op is Operation.GETATTR:
-            new_body = LambdaBody(
-                op.operation(self.__body.tree, str(other)),
-                op.render(body_str, str(other)),
-            )
-            new_closure = self.__closure
+            body_str = op.render(body_str, str(other))
+            new_tree = op.operation(self.__lambda.tree, str(other))
+            new_closure = self.__lambda.closure
         elif op is Operation.GETITEM:
             other_ast = ast.Subscript(
                 value=ast.Name(id="closure", ctx=ast.Load()),
-                slice=ast.Constant(value=len(self.__closure)),
+                slice=ast.Constant(value=len(self.__lambda.closure)),
                 ctx=ast.Load(),
             )
-            new_body = LambdaBody(
-                op.operation(self.__body.tree, other_ast),
-                op.render(body_str, repr(other)),
-            )
-            new_closure = self.__closure.chain([other])
+            body_str = op.render(body_str, repr(other))
+            new_tree = op.operation(self.__lambda.tree, other_ast)
+            new_closure = self.__lambda.closure.chain([other])
 
         return LambdaBuilder(
-            self.__name,
-            new_body,
-            closure=new_closure,
+            Lambda(
+                self.__lambda.name,
+                new_tree,
+                new_closure,
+                body_str,
+            ),
             precedence=op.precedence,
         )
 
@@ -382,8 +385,8 @@ class LambdaBuilder:
         return func(arg)
 
     def __compile(self) -> Callable[[Any], Any]:
-        code = self.__body.compile(self.__name)
-        closure = list(self.__closure)
+        code = self.__lambda.compile(self.__lambda.name)
+        closure = list(self.__lambda.closure)
         # Evaluating the AST we generate is key to the functioning of this
         # object, so we ignore the eval warning here.
         func = eval(code, {"closure": closure})  # pylint: disable=eval-used
