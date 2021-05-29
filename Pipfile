@@ -12,6 +12,7 @@ mypy = "*"
 pytest-cov = "*"
 on-the-lam = {editable = true, path = "."}
 black = "*"
+ipython = "*"
 
 [requires]
 python_version = "3.9"
