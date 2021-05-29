@@ -4,13 +4,13 @@ verify_ssl = true
 name = "pypi"
 
 [packages]
+on-the-lam = {editable = true, path = "."}
 
 [dev-packages]
 pylint = "*"
 pytest = "*"
 mypy = "*"
 pytest-cov = "*"
-on-the-lam = {editable = true, path = "."}
 black = "*"
 ipython = "*"
 

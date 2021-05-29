@@ -1,7 +1,7 @@
 {
     "_meta": {
         "hash": {
-            "sha256": "6d6023d374072726fc5f0e4173caebf733a42207684f66abe5f02ff44ce8151f"
+            "sha256": "e839d10923cd06c43ee8a66d23afe256817af768b26a33d342e97fe83acab167"
         },
         "pipfile-spec": 6,
         "requires": {
@@ -15,7 +15,12 @@
             }
         ]
     },
-    "default": {},
+    "default": {
+        "on-the-lam": {
+            "editable": true,
+            "path": "."
+        }
+    },
     "develop": {
         "appdirs": {
             "hashes": [
@@ -255,10 +260,6 @@
                 "sha256:2d82818f5bb3e369420cb3c4060a7970edba416647068eb4c5343488a6c604a8"
             ],
             "version": "==0.4.3"
-        },
-        "on-the-lam": {
-            "editable": true,
-            "path": "."
         },
         "packaging": {
             "hashes": [
