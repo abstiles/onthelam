@@ -18,6 +18,19 @@ Onthelam supports painless definition of lambda functions that use any
 combination of comparators, arithmetic operations, bitwise operations,
 indexing, and attribute getting.
 
+## Installation and Requirements
+
+Onthelam is installable from PyPI:
+
+```shell
+$ pip install on-the-lam
+```
+
+This initial release is only tested with and supports Python 3.9, but future
+releases will aim at supporting older Python versions as well.
+
+Onthelam is written in pure Python and brings in no additional dependencies.
+
 ## Readable repr
 
 Onthelam lambdas provide a user-friendly `repr` string for easier debugging.
