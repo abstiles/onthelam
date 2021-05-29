@@ -2,3 +2,5 @@
 htmlcov/
 *.egg-info/
 *.py[cod]
+build/
+dist/
