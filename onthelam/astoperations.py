@@ -28,7 +28,7 @@ from operator import (
     truediv,
     xor,
 )
-from typing import Any, Callable, Union
+from typing import Any, Callable, Iterable, Union
 
 
 def compare(op: ast.cmpop) -> Callable[[ast.expr, ast.expr], ast.Compare]:
@@ -80,7 +80,7 @@ def constant(value: Any) -> ast.Constant:
     return ast.Constant(value=value)
 
 
-def lambda_expression(args: list[str], tree: ast.expr) -> ast.Expression:
+def lambda_expression(args: Iterable[str], tree: ast.expr) -> ast.Expression:
     """Generate an ast Expression defining a Lambda"""
     lambda_ast = ast.Expression(
         ast.Lambda(

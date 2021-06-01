@@ -5,21 +5,66 @@ operations on the given argument.
 """
 
 import ast
+import heapq
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
+from itertools import groupby
+from operator import itemgetter
 from typing import (
     cast,
     Any,
     Callable,
     Iterator,
     Iterable,
+    Literal,
     Optional,
     NoReturn,
+    TypeVar,
     Union,
 )
 from types import CodeType
 
 from .astoperations import Operation, name, subscript, constant, lambda_expression
+
+
+T = TypeVar("T")
+
+
+class ArgList:
+    """The list of args for a lambda
+
+    Do not instantiate directly. Build by merging existing Arg and ArgList
+    instances.
+
+    """
+
+    def __init__(self, arg_list: Iterable[str]):
+        # Possibly redundant sorting is cheap with Python's sorting algorithm.
+        self._arg_list = sorted(arg_list)
+
+    def merge(self, other: "ArgList") -> "ArgList":
+        """Combine two ArgLists, preserving sort order"""
+        if not isinstance(other, ArgList):
+            raise TypeError("Attempt to merge ArgList with non-ArgList instance")
+        return ArgList(uniq(heapq.merge(self, other)))
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._arg_list)
+
+    def __len__(self) -> int:
+        return len(self._arg_list)
+
+
+class Arg(ArgList):
+    """Helper constructor to simplify the single-arg case"""
+
+    def __init__(self, identifier: str):
+        if not identifier.isidentifier():
+            raise ValueError("name must be a valid Python identifier")
+        super().__init__([identifier])
+
+    def __len__(self) -> Literal[1]:
+        return 1
 
 
 @dataclass(frozen=True)
@@ -59,7 +104,7 @@ class ClosureChain:
 class Lambda:
     """Maintains the data model of a lambda function"""
 
-    args: list[str]
+    args: ArgList
     tree: ast.expr
     closure: ClosureChain
     body_str: str
@@ -69,7 +114,7 @@ class Lambda:
     def new(cls, arg_name: str) -> "Lambda":
         """Create an empty initial (identity) lambda"""
         return cls(
-            [arg_name], name(arg_name), ClosureChain.new(), arg_name, Operation.ARG
+            Arg(arg_name), name(arg_name), ClosureChain.new(), arg_name, Operation.ARG
         )
 
     def __repr__(self) -> str:
@@ -82,7 +127,7 @@ class Lambda:
     def compile(self) -> CodeType:
         """Create the code for a lambda with this object as its body"""
         code = compile(
-            lambda_expression(self.args, self.tree),
+            lambda_expression(iter(self.args), self.tree),
             "<LambdaBuilder>",
             mode="eval",
         )
@@ -96,10 +141,9 @@ class Lambda:
         left = self.contextually_paren(op)
         right = other.contextually_paren(op, from_right=True)
         right = replace(right, tree=self.update_appended_closure_idxs(right.tree))
-        added_args = [arg for arg in right.args if arg not in set(left.args)]
         return replace(
             left,
-            args=left.args if not added_args else left.args + added_args,
+            args=left.args.merge(right.args),
             tree=op.render_ast(left.tree, right.tree),
             closure=self.closure.chain(right.closure),
             body_str=op.render_str(left, right),
@@ -355,3 +399,13 @@ class LambdaBuilder:
         # contains a single expression containing a single lambda accepting
         # one parameter.
         return cast(Callable[..., Any], func)
+
+
+def uniq(iterable: Iterable[T]) -> Iterable[T]:
+    """Imitate the Unix tool uniq, dedup adjacent items
+
+    This function guarantees overall uniqueness of its elements if and only if
+    the iterable argument is sorted first.
+
+    """
+    return map(itemgetter(0), groupby(iterable))

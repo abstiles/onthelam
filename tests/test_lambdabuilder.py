@@ -2,7 +2,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from onthelam.lambdabuilder import LambdaBuilder
+from onthelam.lambdabuilder import LambdaBuilder, Arg
 
 
 _ = LambdaBuilder("_")
@@ -161,3 +161,35 @@ def test_multi_keyword_args():
     assert repr(fn) == "_1, _2 -> _1[_2]"
     assert fn([1, 2, 3], 2) == 3
     assert fn(_2=2, _1=[1, 2, 3]) == 3
+
+
+def test_arg_sort_by_name():
+    _1 = LambdaBuilder("_1")
+    _2 = LambdaBuilder("_2")
+    fn = _2[_1]
+    assert repr(fn) == "_1, _2 -> _2[_1]"
+    assert fn(2, [1, 2, 3]) == 3
+
+
+def test_arg_1():
+    args = Arg("foo")
+    assert len(args) == 1
+    assert list(args) == ["foo"]
+
+
+def test_args_multi():
+    args = Arg("foo")
+    args = args.merge(Arg("bar"))
+    assert len(args) == 2
+
+
+def test_args_multi_sort():
+    args = Arg("foo")
+    args = args.merge(Arg("bar"))
+    assert list(args) == ["bar", "foo"]
+
+
+def test_args_bad_merge():
+    args = Arg("foo")
+    with pytest.raises(TypeError):
+        args.merge(["these", "args", "are", "not", "in", "order"])
