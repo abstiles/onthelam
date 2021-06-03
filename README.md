@@ -110,7 +110,7 @@ desires:
 ```python
 >>> from onthelam.magic import λ_happy_lamb
 >>> λ_happy_lamb.baa
-λ_happy_lamb -> happy_lamb.baa
+λ_happy_lamb -> λ_happy_lamb.baa
 ```
 
 Or consider replacing the standard underscore with magic to allow yourself the
