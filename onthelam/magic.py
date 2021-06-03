@@ -20,6 +20,9 @@ from typing import Any
 from .lambdabuilder import LambdaBuilder
 
 
+_ = LambdaBuilder("_")
+
+
 class DynamicModule(ModuleType):
     """Module type that generates a new LambdaBuilder on any module access"""
 
@@ -29,8 +32,8 @@ class DynamicModule(ModuleType):
         return LambdaBuilder(name)
 
     @property
-    def __all__(self):
-        return []
+    def __all__(self) -> list[str]:
+        return [*map("_" + _, map(str, range(10)))]
 
 
 sys.modules[__name__].__class__ = DynamicModule
