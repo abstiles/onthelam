@@ -47,6 +47,41 @@ This is especially useful for logging errors in functions that accept functions
 as arguments, enabling you to log something about the argument that isn't just
 `<function <lambda>(x)>`.
 
+## Composable
+
+Need to use the same argument twice in your lambda? No sweat.
+
+```python
+>>> tetration_2 = _ ** _
+>>> tetration_2(5)
+3125
+```
+
+Need a lambda with more than one argument? Combining lambda builders with
+different names gets you a function that takes as many arguments as you have
+distinct names. There are ten additional numbered lambda builders importable
+from the main onthelam module. Specify the order of your arguments by the order
+of their names.
+
+```python
+>>> from onthelam import _1, _2, _3
+>>> fn = _2[_1] + _3
+```
+
+You still get a useful `repr`:
+
+```python
+>>> fn
+_1, _2, _3 -> _2[_1] + _3
+```
+
+And it works like you'd expect it:
+
+```python
+>>> fn(2, [1, 2, 3], 4)
+7
+```
+
 ## Renamable
 
 Maybe you take umbrage with my aesthetic choice to use an underscore as my
@@ -66,46 +101,33 @@ It uses whatever name you give it in its `repr`:
 λx -> λx // 2
 ```
 
-## Composable
+## Magic
 
-Need to use the same argument twice in your lambda? No sweat.
-
-```pyrhon
->>> tetration_2 = _ ** _
->>> tetration_2(5)
-3125
-```
-
-Need a lambda with more than one argument? Combining lambda builders with
-different names gets you a function that takes as many arguments as you have
-distinct names.
+Simplify your life further by taking advantage of the fact that onthelam
+includes real, literal magic to grant a lambdabuilder by any name your heart
+desires:
 
 ```python
->>> _a = LambdaBuilder("_a")
->>> _b = LambdaBuilder("_b")
->>> _b = LambdaBuilder("_c")
->>> fn = _a[_b] + _c
+>>> from onthelam.magic import λ_happy_lamb
+>>> λ_happy_lamb.baa
+λ_happy_lamb -> happy_lamb.baa
 ```
 
-You still get a useful `repr`:
+Or consider replacing the standard underscore with magic to allow yourself the
+freedom to use ad-hoc argument names:
 
 ```python
+>>> from onthelam import magic as _
+>>> fn = _.mapping[_.key]
 >>> fn
-_a, _b, _c -> _a[_b] + _c
+key, mapping -> mapping[key]
 ```
 
-And it works like you'd expect it:
+Take advantage of this for functions you want to call by keyword:
 
 ```python
->>> fn([1, 2, 3], 2, 4)
-7
-```
-
-Calling by keyword is permitted as well:
-
-```python
->>> fn(_b=2, _c=4, _a=[1, 2, 3])
-7
+>>> fn(mapping={"hello": "world"}, key="hello")
+'world'
 ```
 
 ## Designed with itertools in mind
@@ -123,7 +145,7 @@ of iterated exponentiation of a number with itself.
 >>> from itertools import repeat
 >>> def tetration(x, n):
 ...     """Iterate `x ** x` n times"""
-...     return reduce(_a ** _b, repeat(x, n))
+...     return reduce(_1 ** _2, repeat(x, n))
 ...
 >>> tetration(5, 1)
 5
